@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+		<meta name="theme-color" content="#171717" />
+		<link rel="icon" href="/favicon.svg" />
+		<link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+		<link rel="manifest" href="/manifest.webmanifest" />
+		<title>FamilyOS</title>
+		<script>
+			// Apply night before the first paint so the page never flashes the day palette: this
+			// device's choice (lib/theme.svelte.ts), else the system setting.
+			try {
+				const mode = localStorage.getItem('famos.mode');
+				if (mode === 'night' || (mode !== 'day' && matchMedia('(prefers-color-scheme: dark)').matches))
+					document.documentElement.classList.add('dark');
+			} catch {
+				if (matchMedia('(prefers-color-scheme: dark)').matches) document.documentElement.classList.add('dark');
+			}
+			// Apply the last theme this device used before the first paint as well.
+			try {
+				const theme = JSON.parse(localStorage.getItem('famos.theme') || 'null');
+				if (theme && typeof theme.css === 'string') {
+					const style = document.createElement('style');
+					style.id = 'famos-theme';
+					style.textContent = theme.css;
+					document.head.appendChild(style);
+				}
+			} catch {}
+			// And the last style, so a styled app never draws in the default's type first.
+			try {
+				const style = localStorage.getItem('famos.style');
+				document.documentElement.dataset.style = style && /^[a-z][a-z0-9-]{1,39}$/.test(style) ? style : 'broadsheet';
+			} catch {
+				document.documentElement.dataset.style = 'broadsheet';
+			}
+		</script>
+		%sveltekit.head%
+	</head>
+	<body data-sveltekit-preload-data="hover">
+		<div style="display: contents">%sveltekit.body%</div>
+	</body>
+</html>

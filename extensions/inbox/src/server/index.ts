@@ -1,0 +1,28 @@
+import { defineExtension } from '@famos/sdk';
+import {
+	addItem,
+	createItem,
+	dismissItem,
+	fileItem,
+	getItemFile,
+	inboxShare,
+	itemChanged,
+	listItems,
+	retryItem,
+} from './items.ts';
+import { itemReady, processItem } from './process.ts';
+import { searchIndex } from './search.ts';
+import { migrations } from './store.ts';
+
+/** Family Inbox: shared things become AI-proposed drafts that someone approves. */
+export default defineExtension({
+	id: 'inbox',
+	migrations,
+	ai: { index: searchIndex },
+	actions: [addItem, retryItem, dismissItem, fileItem],
+	routes: [createItem, listItems, getItemFile],
+	jobs: [processItem],
+	notifications: [itemReady],
+	events: [itemChanged],
+	capabilities: [inboxShare],
+});

@@ -1,0 +1,163 @@
+import { expect, it } from 'vitest';
+import type { CoreTables } from '../src/tables.ts';
+import { createTestKernel } from './harness.ts';
+
+/**
+ * Hand-written table types must match the migrated schema. Listing columns as
+ * `Record<keyof Table, true>` makes the compiler flag a type/list mismatch, and the test flags
+ * a list/database mismatch.
+ */
+const expected: { [T in keyof CoreTables]: Record<keyof CoreTables[T], true> } = {
+	core_member_memory: {
+		id: true,
+		member_id: true,
+		text: true,
+		source: true,
+		created_at: true,
+		updated_at: true,
+	},
+	core_idempotency: {
+		key: true,
+		member_id: true,
+		action_id: true,
+		status: true,
+		response: true,
+		created_at: true,
+	},
+	core_embeddings: {
+		id: true,
+		extension_id: true,
+		source_kind: true,
+		source_id: true,
+		capability: true,
+		owner_member_id: true,
+		title: true,
+		href: true,
+		snippet: true,
+		model: true,
+		dimensions: true,
+		text_hash: true,
+		chunk_index: true,
+		vector: true,
+		updated_at: true,
+	},
+	core_members: {
+		id: true,
+		display_name: true,
+		role_id: true,
+		about: true,
+		color: true,
+		locale: true,
+		created_at: true,
+		updated_at: true,
+		archived_at: true,
+	},
+	core_roles: {
+		id: true,
+		name: true,
+		base: true,
+		overrides: true,
+		created_at: true,
+		updated_at: true,
+	},
+	core_drafts: {
+		id: true,
+		action_id: true,
+		input: true,
+		edited_input: true,
+		status: true,
+		proposed_by: true,
+		source_kind: true,
+		source_id: true,
+		summary: true,
+		model: true,
+		prompt_version: true,
+		uncertain_fields: true,
+		dedupe_key: true,
+		confidence: true,
+		decided_by: true,
+		decided_at: true,
+		applied_at: true,
+		result: true,
+		error: true,
+		for_member: true,
+		auto_approved: true,
+		created_at: true,
+		updated_at: true,
+	},
+	core_audit_log: {
+		id: true,
+		at: true,
+		actor: true,
+		action_id: true,
+		draft_id: true,
+		outcome: true,
+	},
+	core_settings: { key: true, value: true, updated_at: true },
+	core_devices: {
+		id: true,
+		name: true,
+		kind: true,
+		token_hash: true,
+		created_by: true,
+		created_at: true,
+		last_seen_at: true,
+		revoked_at: true,
+		display_capabilities: true,
+		display_show_names: true,
+	},
+	core_display_pairings: {
+		id: true,
+		device_code_hash: true,
+		user_code: true,
+		expires_at: true,
+		attempts: true,
+		status: true,
+		name: true,
+		capabilities: true,
+		show_names: true,
+		confirmed_by: true,
+		device_id: true,
+		created_ip: true,
+		created_at: true,
+	},
+	core_notifications: {
+		id: true,
+		member_id: true,
+		kind: true,
+		title_key: true,
+		title_params: true,
+		body_key: true,
+		body_params: true,
+		url: true,
+		source_kind: true,
+		source_id: true,
+		dedupe_key: true,
+		created_at: true,
+		read_at: true,
+	},
+	core_notification_prefs: { member_id: true, prefs: true, updated_at: true },
+	core_api_tokens: {
+		id: true,
+		member_id: true,
+		name: true,
+		token_hash: true,
+		scope: true,
+		expires_at: true,
+		last_used_at: true,
+		created_at: true,
+		revoked_at: true,
+	},
+	core_api_token_handles: { token_id: true, handle: true, ref_id: true, created_at: true },
+};
+
+it('core table types match the migrated schema', async () => {
+	const k = await createTestKernel();
+	const tables = await k.ctx.db.introspection.getTables();
+	for (const [name, columns] of Object.entries(expected)) {
+		const table = tables.find((t) => t.name === name);
+		expect(table, name).toBeDefined();
+		expect(table?.columns.map((c) => c.name).sort(), name).toEqual(Object.keys(columns).sort());
+	}
+	await k.close();
+});

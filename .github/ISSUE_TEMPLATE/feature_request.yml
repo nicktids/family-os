@@ -1,0 +1,41 @@
+name: Feature request
+description: Suggest something FamilyOS could do for a family.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the idea. The most useful requests start from a real situation in a household rather than from a solution.
+  - type: textarea
+    id: situation
+    attributes:
+      label: The situation
+      description: What happens in your household today, and what is hard about it?
+      placeholder: "We get the school's lunch menu as a PDF every month and …"
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What you would like
+      description: How FamilyOS could help. Sketches and examples from other apps are welcome.
+    validations:
+      required: true
+  - type: textarea
+    id: who
+    attributes:
+      label: Who uses it
+      description: Who in the family would use it, and on what (a phone, the wall display, Telegram, …)?
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you do now
+      description: Workarounds or other tools you use for this today.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I searched the existing issues and the user guide.
+          required: true
+        - label: It works for families anywhere (no country-specific rules or defaults), or I explained how it could.

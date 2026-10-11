@@ -1,0 +1,254 @@
+import type { z } from 'zod';
+
+/**
+ * Language models. Extensions ask for a *role*, never a provider or model: the
+ * family maps roles to models in the admin UI. Only background jobs receive an `LlmPort`
+ * (`JobContext.llm`), so no HTTP request can wait on a model.
+ */
+export const MODEL_ROLES = ['fast', 'vision', 'smart', 'transcribe', 'embed'] as const;
+export type ModelRole = (typeof MODEL_ROLES)[number];
+
+/**
+ * How far the AI may use one area, an extension's data and actions. `local` means only
+ * through models on the family's own network. Set per extension in Settings → AI.
+ */
+export const AI_AREA_ACCESS = ['off', 'local', 'any'] as const;
+export type AiAreaAccess = (typeof AI_AREA_ACCESS)[number];
+
+export interface LlmFile {
+	data: Uint8Array;
+	/** `image/png`, `image/jpeg`, `application/pdf` … Images need a vision-capable model. */
+	mediaType: string;
+}
+
+export interface LlmObjectRequest<T> {
+	role: ModelRole;
+	/** What the call is for, recorded in usage, e.g. `inbox.extract`. */
+	feature: string;
+	/**
+	 * The areas (extension ids) whose data or actions the call carries, the feature's own
+	 * extension included. The adapter refuses the call when one is off for the AI, or local-only
+	 * and the role's provider is not local.
+	 */
+	areas: readonly string[];
+	/** The structured output; the result is validated against it. */
+	schema: z.ZodType<T>;
+	/**
+	 * The JSON Schema shown to the model, when it should be more detailed than `schema`. Use it
+	 * to describe nested shapes precisely while validating them loosely (and one by one) yourself.
+	 */
+	jsonSchema?: Record<string, unknown>;
+	system?: string;
+	prompt: string;
+	files?: readonly LlmFile[];
+	/** Required: every model call has an explicit time limit. */
+	timeoutMs: number;
+	/** Recorded in usage. */
+	memberId?: string | null;
+	jobId?: string | null;
+}
+
+/** One message of a chat. Tool results are data, never instructions. */
+export interface LlmChatMessage {
+	role: 'user' | 'assistant' | 'tool';
+	content: string;
+	/** Tool messages: which call the result answers, and which tool it was. */
+	toolCallId?: string;
+	toolName?: string;
+}
+
+/** A function the model may call during a chat. `execute` runs in this process, never remotely. */
+export interface LlmChatTool {
+	/** Letters, digits, `_` and `-` only (providers reject dots); the caller maps names back. */
+	name: string;
+	description: string;
+	/** JSON Schema of the input. */
+	inputSchema: Record<string, unknown>;
+	/**
+	 * Runs the call. The result is shown to the model as is (serialised when not a string); a
+	 * thrown error is shown as a failed call so the model can recover.
+	 */
+	execute(input: unknown): Promise<unknown>;
+}
+
+export interface LlmChatRequest {
+	role: ModelRole;
+	/** What the call is for, recorded in usage, e.g. `assistant.chat`. */
+	feature: string;
+	/** The areas whose data or actions the call carries (see `LlmObjectRequest.areas`). */
+	areas: readonly string[];
+	system?: string;
+	messages: readonly LlmChatMessage[];
+	tools: readonly LlmChatTool[];
+	/** The most model round trips (a round trip that calls tools is one step). */
+	maxSteps: number;
+	/** Required: every model call has an explicit time limit (for the whole tool loop). */
+	timeoutMs: number;
+	memberId?: string | null;
+	jobId?: string | null;
+	/** Streamed answer text, in order. */
+	onText?(delta: string): void;
+	onToolCall?(name: string, input: unknown): void;
+	onToolResult?(name: string, ok: boolean): void;
+}
+
+export interface LlmChatResult {
+	/** The final answer. Empty when the step limit ended the loop on a tool call. */
+	text: string;
+	toolCalls: { name: string; ok: boolean }[];
+	/** `provider name / model`, for display and debugging. */
+	model: string;
+	usage: LlmUsage;
+}
+
+export interface LlmTranscribeRequest {
+	/** What the call is for, recorded in usage, e.g. `inbox.transcribe`. */
+	feature: string;
+	/** The areas the audio comes from (see `LlmObjectRequest.areas`). */
+	areas: readonly string[];
+	audio: Uint8Array;
+	/** `audio/ogg`, `audio/mpeg`, `audio/mp4` … */
+	mediaType: string;
+	/** Some servers decide the format from the file name. */
+	filename: string;
+	/** ISO 639-1 hint, for example the family language. */
+	language?: string;
+	/** Required: every model call has an explicit time limit. */
+	timeoutMs: number;
+	memberId?: string | null;
+	jobId?: string | null;
+}
+
+export interface LlmTranscribeResult {
+	text: string;
+	/** `provider name / model`, for display and debugging. */
+	model: string;
+	usage: LlmUsage;
+}
+
+export interface LlmEmbedRequest {
+	/** What the call is for, recorded in usage, e.g. `search` or `core.embed`. */
+	feature: string;
+	/**
+	 * The area (extension id) the texts come from; `core` for a search query. The adapter refuses
+	 * the call when the area is off for the AI, or local-only and the `embed` provider is not
+	 * local.
+	 */
+	area: string;
+	texts: readonly string[];
+	/** Required: every model call has an explicit time limit. */
+	timeoutMs: number;
+	memberId?: string | null;
+	jobId?: string | null;
+}
+
+export interface LlmEmbedResult {
+	/** One vector per text, in order. */
+	vectors: Float32Array[];
+	/**
+	 * A stable key of the model that made them (`<provider id>:<model>`): vectors of different
+	 * keys must never be compared, so a change of the model rebuilds the index.
+	 */
+	model: string;
+	dimensions: number;
+}
+
+export interface LlmUsage {
+	inputTokens: number | null;
+	outputTokens: number | null;
+	/** USD, when the provider reports it (OpenRouter); local models cost 0. */
+	cost: number | null;
+}
+
+export interface LlmObjectResult<T> {
+	output: T;
+	/** `provider name / model`, for display and debugging. */
+	model: string;
+	usage: LlmUsage;
+}
+
+/**
+ * What the family lets the AI see (Settings → AI). Callers build their prompts accordingly; the
+ * adapter also drops files itself when they are not allowed.
+ */
+export interface LlmPolicy {
+	/** AI is on, and so is this feature (Settings → AI). When false, calls fail with `disabled`. */
+	enabled: boolean;
+	/** Photos and documents may be sent to the model. */
+	sendFiles: boolean;
+	/** Member names and "about" texts may be sent; otherwise only handles like `member:1`. */
+	sendPeople: boolean;
+	/** Voice notes may be sent to the speech-to-text model. */
+	sendVoice: boolean;
+	/**
+	 * The provider of the role asked about runs on the family's own network (its address resolves
+	 * only to local addresses). Callers use it to decide which areas they may draw from.
+	 */
+	local: boolean;
+	/**
+	 * The stable key (`<provider id>:<model>`, as in `LlmEmbedResult.model`) of the model set for
+	 * the role asked about, or null when none is set.
+	 */
+	model: string | null;
+}
+
+export interface LlmPort {
+	generateObject<T>(request: LlmObjectRequest<T>): Promise<LlmObjectResult<T>>;
+	/**
+	 * A chat with tools: the model may call the tools, in a loop of at most `maxSteps`
+	 * round trips, and answers in text. Same rules as `generateObject` (switches, limits, areas,
+	 * usage). Usage is recorded once for the whole loop.
+	 */
+	chat(request: LlmChatRequest): Promise<LlmChatResult>;
+	/**
+	 * Turns speech into text with the `transcribe` role. Same rules as `generateObject` (switches,
+	 * limits, usage); fails with `disabled` when the family does not send voice notes.
+	 */
+	transcribe(request: LlmTranscribeRequest): Promise<LlmTranscribeResult>;
+	/**
+	 * Turns texts into vectors with the `embed` role, for search. Same rules as
+	 * `generateObject` (switches, limits, area access, usage); no fallback to another provider.
+	 */
+	embed(request: LlmEmbedRequest): Promise<LlmEmbedResult>;
+	/**
+	 * The family's choices for one feature (the `feature` named in requests), and whether the
+	 * provider of the model `role` the feature will use is local.
+	 */
+	policy(feature: string, role: ModelRole): Promise<LlmPolicy>;
+}
+
+/**
+ * Why a model call failed. `retryable` tells a job whether trying again later can help
+ * (timeouts, outages) or whether a person must act first (no model set, bad key, limit reached).
+ */
+export type LlmErrorCode =
+	| 'not_configured'
+	/** AI, or this feature, is turned off. */
+	| 'disabled'
+	| 'limit_reached'
+	| 'auth'
+	/** The provider refused the request itself (for example a schema it cannot handle). */
+	| 'rejected'
+	/** No provider of the model meets the family's data policy (zero data retention). */
+	| 'data_policy'
+	/** The area may only use local models, and the role's provider is not local (no fallback). */
+	| 'local_required'
+	| 'timeout'
+	| 'unavailable'
+	| 'invalid_output';
+
+const RETRYABLE: ReadonlySet<LlmErrorCode> = new Set(['timeout', 'unavailable', 'invalid_output']);
+
+export class LlmError extends Error {
+	readonly code: LlmErrorCode;
+	readonly retryable: boolean;
+
+	constructor(code: LlmErrorCode, message: string, options?: { cause?: unknown }) {
+		super(message, options);
+		this.name = 'LlmError';
+		this.code = code;
+		this.retryable = RETRYABLE.has(code);
+	}
+}
+
+export const isLlmError = (error: unknown): error is LlmError => error instanceof LlmError;

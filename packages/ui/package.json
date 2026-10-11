@@ -1,0 +1,61 @@
+{
+	"name": "@famos/ui",
+	"version": "0.0.0",
+	"license": "AGPL-3.0-or-later",
+	"private": true,
+	"type": "module",
+	"exports": {
+		"./theme.css": "./src/theme.css",
+		"./styles.css": "./src/styles.css",
+		"./type.css": "./src/type.css",
+		"./styles": "./src/styles.ts",
+		"./utils": "./src/utils.ts",
+		"./slots": "./src/slots.ts",
+		"./slot": {
+			"svelte": "./src/Slot.svelte",
+			"default": "./src/Slot.svelte"
+		},
+		"./button": {
+			"svelte": "./src/components/button/index.ts",
+			"default": "./src/components/button/index.ts"
+		},
+		"./input": {
+			"svelte": "./src/components/input/index.ts",
+			"default": "./src/components/input/index.ts"
+		},
+		"./label": {
+			"svelte": "./src/components/label/index.ts",
+			"default": "./src/components/label/index.ts"
+		},
+		"./famos": {
+			"svelte": "./src/famos/index.ts",
+			"default": "./src/famos/index.ts"
+		},
+		"./timeline": "./src/famos/timeline.ts",
+		"./app": "./src/app-context.ts"
+	},
+	"peerDependencies": {
+		"svelte": "5.57.1"
+	},
+	"dependencies": {
+		"@fontsource-variable/archivo": "5.3.0",
+		"@fontsource-variable/figtree": "5.3.0",
+		"@fontsource/barlow-condensed": "5.3.0",
+		"@fontsource/instrument-serif": "5.3.0",
+		"cn": "0.4.0",
+		"tailwind-variants": "3.3.1"
+	},
+	"devDependencies": {
+		"@sveltejs/vite-plugin-svelte": "7.3.1",
+		"happy-dom": "20.14.5",
+		"shadcn-svelte": "1.7.0",
+		"svelte": "5.57.1",
+		"svelte-check": "4.7.6",
+		"typescript": "6.0.3",
+		"vite": "8.3.2"
+	},
+	"scripts": {
+		"test": "vitest run",
+		"typecheck": "svelte-check --tsconfig ./tsconfig.json --fail-on-warnings"
+	}
+}

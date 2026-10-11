@@ -1,0 +1,413 @@
+<script lang="ts">
+	import { goto } from '$app/navigation';
+	import { isApiError, type paths, unwrap } from '@famos/api-client';
+	import { Button } from '@famos/ui/button';
+	import {
+		Avatar,
+		Card,
+		ConfirmButton,
+		IconButton,
+		Page,
+		PageHeader,
+		Pill,
+		Row,
+		Section,
+		SidePanel,
+		wide,
+	} from '@famos/ui/famos';
+	import { Input } from '@famos/ui/input';
+	import { Label } from '@famos/ui/label';
+	import { ChevronRight, Pencil, Plus, ShieldCheck } from '@lucide/svelte';
+	import { api } from '#lib/api.js';
+	import { family } from '#lib/family.svelte.js';
+	import { t, tDynamic } from '#lib/i18n.svelte.js';
+	import { onEvent } from '#lib/realtime.js';
+	import RowMenu from '#lib/RowMenu.svelte';
+	import SelectField from '#lib/SelectField.svelte';
+	import { session } from '#lib/session.svelte.js';
+	import { toasts } from '#lib/toast.svelte.js';
+
+	/**
+	 * Members: one row per person with the role as a pill and a
+	 * `...` menu; adding, editing and the sign-in live in one panel (a sheet on phones); a roles
+	 * summary sits below, or beside from 80 rem.
+	 */
+	type Member =
+		paths['/api/v1/core/members']['get']['responses'][200]['content']['application/json'][number];
+	type Roles = paths['/api/v1/core/roles']['get']['responses'][200]['content']['application/json'];
+
+	const PIN = 'core.signIn.pin';
+	// The members come from the shell, which reads them once and again on every member event.
+	const members = $derived<Member[]>(family.members);
+	let roles = $state<Roles['roles']>([]);
+	let rolesLoaded = $state(false);
+	const loaded = $derived(family.loaded && rolesLoaded);
+
+	/** The open panel: a new member (`add`) or one member (edit and sign-in together). */
+	let panel = $state<{ memberId: string | null } | null>(null);
+	let name = $state('');
+	let roleId = $state('member');
+	let about = $state('');
+	let pin = $state('');
+	let email = $state('');
+	let password = $state('');
+	let error = $state<string | null>(null);
+	let saving = $state(false);
+	let formEl = $state<HTMLFormElement>();
+
+	const editing = $derived(panel?.memberId ? members.find((m) => m.id === panel?.memberId) : null);
+	const roleName = (id: string) => {
+		const role = roles.find((r) => r.id === id);
+		return role?.name ?? tDynamic(`app:role_${id}`);
+	};
+	const roleHint = (id: string) => {
+		const role = roles.find((r) => r.id === id);
+		if (!role || role.builtIn) return tDynamic(`app:role_${id}_hint`);
+		return t('role_custom_hint', { base: tDynamic(`app:role_${role.base}`) });
+	};
+	const usesPin = (id: string) =>
+		roles.find((r) => r.id === id)?.capabilities.includes(PIN) ?? false;
+	const signIn = (member: Member) =>
+		usesPin(member.roleId) ? t('members_signin_pin_family') : t('members_signin_password');
+
+	const dirty = $derived(
+		panel !== null &&
+			(editing
+				? name.trim() !== editing.displayName ||
+					roleId !== editing.roleId ||
+					about.trim() !== (editing.about ?? '') ||
+					pin !== '' ||
+					email !== '' ||
+					password !== ''
+				: name !== '' || about !== ''),
+	);
+
+	/** The roles, with how many people hold each one. */
+	async function loadRoles() {
+		const r = await api.GET('/api/v1/core/roles');
+		roles = r.data?.roles ?? [];
+		rolesLoaded = true;
+	}
+	/** After a change made here that sends no event (a PIN, a password): members and roles again. */
+	async function load() {
+		await Promise.all([family.refresh(), loadRoles()]);
+	}
+
+	// The API enforces access; this only keeps others out of a screen they cannot use.
+	$effect(() => {
+		if (session.status === 'ready' && !session.can('core.members.manage'))
+			void goto('/', { replaceState: true });
+	});
+
+	$effect(() => {
+		if (!session.can('core.members.manage')) return;
+		void loadRoles();
+		// The shell reads the members again on a member event; the role counts change with them.
+		const offMembers = onEvent('core.member.', () => void loadRoles());
+		const offRoles = onEvent('core.role.', () => void loadRoles());
+		return () => {
+			offMembers();
+			offRoles();
+		};
+	});
+
+	/** A specific message for the refusals people can run into; anything else is generic. */
+	function errorText(e: unknown) {
+		const reason =
+			isApiError(e) && typeof e.details === 'object' && e.details !== null && 'reason' in e.details
+				? e.details.reason
+				: null;
+		if (reason === 'last_admin') return t('members_err_last_admin');
+		if (reason === 'email_taken') return t('members_err_email_taken');
+		return t('error_generic');
+	}
+
+	function openAdd() {
+		name = '';
+		roleId = 'member';
+		about = '';
+		pin = email = password = '';
+		error = null;
+		panel = { memberId: null };
+	}
+
+	function openEdit(member: Member) {
+		name = member.displayName;
+		roleId = member.roleId;
+		about = member.about ?? '';
+		pin = email = password = '';
+		error = null;
+		panel = { memberId: member.id };
+	}
+
+	async function submit(event: SubmitEvent) {
+		event.preventDefault();
+		if (!panel || saving) return;
+		saving = true;
+		error = null;
+		try {
+			if (!editing) {
+				unwrap(
+					await api.POST('/api/v1/actions/core.createMember', {
+						body: {
+							displayName: name.trim(),
+							roleId,
+							...(about.trim() && { about: about.trim() }),
+						},
+					}),
+				);
+			} else {
+				unwrap(
+					await api.POST('/api/v1/actions/core.updateMember', {
+						body: {
+							memberId: editing.id,
+							displayName: name.trim(),
+							roleId,
+							about: about.trim() || null,
+						},
+					}),
+				);
+				// The sign-in is only changed when something was typed for it.
+				if (usesPin(roleId) && pin) {
+					unwrap(
+						await api.PUT('/api/v1/core/members/{memberId}/pin', {
+							params: { path: { memberId: editing.id } },
+							body: { pin },
+						}),
+					);
+					toasts.show(t('members_login_saved'));
+				} else if (!usesPin(roleId) && (email || password)) {
+					unwrap(
+						await api.PUT('/api/v1/core/members/{memberId}/password', {
+							params: { path: { memberId: editing.id } },
+							body: { email, password },
+						}),
+					);
+					toasts.show(t('members_login_saved'));
+				}
+			}
+			panel = null;
+			await load();
+		} catch (e) {
+			error = errorText(e);
+		} finally {
+			saving = false;
+		}
+	}
+
+	async function remove(member: Member) {
+		try {
+			unwrap(
+				await api.POST('/api/v1/actions/core.archiveMember', { body: { memberId: member.id } }),
+			);
+			toasts.show(t('members_removed', { name: member.displayName }));
+			panel = null;
+			await load();
+		} catch (e) {
+			error = errorText(e);
+		}
+	}
+</script>
+
+{#snippet pencil()}<Pencil class="size-4" />{/snippet}
+
+<Page template="settings">
+	<PageHeader title={t('members_title')}>
+		{#snippet actions()}
+			{#if wide.current}
+				<Button variant="primary" onclick={openAdd}
+					><Plus aria-hidden="true" />{t('members_add_button')}</Button
+				>
+			{:else}
+				<IconButton variant="primary" label={t('members_add_button')} onclick={openAdd}>
+					<Plus class="size-5" aria-hidden="true" />
+				</IconButton>
+			{/if}
+		{/snippet}
+	</PageHeader>
+
+	<div class="settings-pair grid items-start gap-8 @[80rem]:grid-cols-2">
+		<div class="grid gap-3">
+			<Section label={t('members_title')} count={members.length}>
+				<Card rows data-testid="members-list">
+					{#each members as member (member.id)}
+						<Row
+							title={member.id === session.me?.id
+								? `${member.displayName} · ${t('members_you')}`
+								: member.displayName}
+							meta={[
+								wide.current ? null : roleName(member.roleId),
+								signIn(member),
+								member.about ? t('members_about_meta', { about: member.about }) : null,
+							]
+								.filter(Boolean)
+								.join(' · ')}
+							onclick={wide.current ? undefined : () => openEdit(member)}
+							data-testid="member-row"
+						>
+							{#snippet lead()}<Avatar
+									name={member.displayName}
+									color={member.color}
+									size={40}
+								/>{/snippet}
+							{#snippet trail()}
+								{#if wide.current}
+									<Pill>{roleName(member.roleId)}</Pill>
+									<RowMenu
+										name={member.displayName}
+										items={[
+											{
+												id: 'edit',
+												label: t('members_edit'),
+												icon: pencil,
+												onselect: () => openEdit(member),
+											},
+										]}
+									/>
+								{:else}
+									<ChevronRight class="text-ink-soft size-4" aria-hidden="true" />
+								{/if}
+							{/snippet}
+						</Row>
+					{/each}
+				</Card>
+			</Section>
+			<p class="text-ink-soft px-1 text-[13px]">
+				{t('members_pin_hint')}
+				<a class="text-info font-semibold underline underline-offset-2" href="/settings/devices"
+					>{t('nav_devices_displays')}</a
+				>
+			</p>
+		</div>
+
+		<Section label={t('nav_roles')}>
+			{#snippet actions()}
+				<Button variant="ghost" size="sm" href="/settings/roles"
+					>{t('members_open_roles')}<ChevronRight class="size-4" aria-hidden="true" /></Button
+				>
+			{/snippet}
+			<Card rows data-testid="roles-summary">
+				{#each roles as role (role.id)}
+					<Row
+						href="/settings/roles"
+						title={role.name ?? tDynamic(`app:role_${role.id}`)}
+						meta="{role.builtIn
+							? tDynamic(`app:role_${role.id}_hint`)
+							: t('role_custom_hint', {
+									base: tDynamic(`app:role_${role.base}`),
+								})} · {role.members === 0
+							? t('roles_nobody')
+							: t('roles_people', { count: role.members })}"
+					>
+						{#snippet lead()}
+							<ShieldCheck class="size-[18px]" aria-hidden="true" />
+						{/snippet}
+						{#snippet trail()}
+							{#if !wide.current}<ChevronRight
+									class="text-ink-soft size-4"
+									aria-hidden="true"
+								/>{/if}
+						{/snippet}
+					</Row>
+				{/each}
+			</Card>
+		</Section>
+	</div>
+
+	<SidePanel
+		open={panel !== null}
+		title={editing ? editing.displayName : t('members_add')}
+		closeLabel={t('side_panel_close')}
+		cancelLabel={t('cancel')}
+		saveLabel={t('save')}
+		saveDisabled={saving || !name.trim()}
+		onsave={() => formEl?.requestSubmit()}
+		onclose={() => (panel = null)}
+		{dirty}
+		discard={{
+			title: t('discard_title'),
+			description: t('discard_hint'),
+			keep: t('discard_keep'),
+			discard: t('discard_confirm'),
+		}}
+	>
+		{#snippet danger()}
+			{#if editing}
+				<ConfirmButton
+					label={t('members_remove')}
+					confirmLabel={t('members_remove_confirm')}
+					onconfirm={() => remove(editing)}
+				/>
+			{/if}
+		{/snippet}
+		<form class="grid gap-4" bind:this={formEl} onsubmit={submit}>
+			<div class="grid gap-1.5">
+				<Label for="member-name">{t('members_name')}</Label>
+				<Input id="member-name" bind:value={name} required maxlength={60} />
+			</div>
+			<div class="grid gap-1.5">
+				<Label for="member-role">{t('members_role')}</Label>
+				<SelectField id="member-role" bind:value={roleId}>
+					{#each roles.filter((r) => r.builtIn) as r (r.id)}
+						<option value={r.id}>{roleName(r.id)}</option>
+					{/each}
+					{#each roles.filter((r) => !r.builtIn) as r (r.id)}
+						<option value={r.id}>{r.name}</option>
+					{/each}
+				</SelectField>
+				<small class="text-ink-soft text-[13px]">{roleHint(roleId)}</small>
+			</div>
+			<div class="grid gap-1.5">
+				<Label for="member-about">{t('members_about')}</Label>
+				<Input id="member-about" bind:value={about} maxlength={300} />
+				<small class="text-ink-soft text-[13px]">{t('members_about_hint')}</small>
+			</div>
+
+			{#if editing}
+				<div class="border-line grid gap-4 border-t pt-4">
+					<h3 class="text-ink-soft text-xs font-bold tracking-[0.06em] uppercase">
+						{t('members_signin_title')}
+					</h3>
+					{#if usesPin(roleId)}
+						<div class="grid gap-1.5">
+							<Label for="member-pin">{t('members_new_pin')}</Label>
+							<Input
+								id="member-pin"
+								inputmode="numeric"
+								autocomplete="off"
+								pattern={'\\d{4,6}'}
+								bind:value={pin}
+							/>
+							<small class="text-ink-soft text-[13px]">{t('members_pin_hint')}</small>
+						</div>
+					{:else}
+						<div class="grid gap-1.5">
+							<Label for="member-email">{t('members_email')}</Label>
+							<Input
+								id="member-email"
+								type="email"
+								bind:value={email}
+								autocomplete="off"
+								required={password !== ''}
+							/>
+						</div>
+						<div class="grid gap-1.5">
+							<Label for="member-password">{t('members_password')}</Label>
+							<Input
+								id="member-password"
+								type="password"
+								bind:value={password}
+								minlength={10}
+								autocomplete="new-password"
+								required={email !== ''}
+							/>
+							<small class="text-ink-soft text-[13px]">{t('members_signin_leave')}</small>
+						</div>
+					{/if}
+				</div>
+				<p class="text-ink-soft text-[13px]">{t('members_remove_hint')}</p>
+			{/if}
+			{#if error}<p class="text-destructive text-sm font-semibold" role="alert">{error}</p>{/if}
+		</form>
+	</SidePanel>
+</Page>

@@ -1,0 +1,38 @@
+import type { DraftPresenter } from '@famos/ui/slots';
+import { Car, Wrench } from '@lucide/svelte';
+import type { AddLogInput, AddVehicleInput } from '../contract/index.js';
+
+/** How a suggested vehicle reads in the Inbox. */
+export const addVehiclePresenter: DraftPresenter<AddVehicleInput> = {
+	actionId: 'vehicles.addVehicle',
+	kind: (c) => c.t('vehicles:kind_vehicle'),
+	icon: Car,
+	title: (input) => input.name,
+	fields: (input, c) => [
+		...(input.plate
+			? [{ label: c.t('vehicles:draft_plate'), value: input.plate, path: 'plate' }]
+			: []),
+	],
+	approveLabel: (c) => c.t('vehicles:draft_approve_add'),
+};
+
+/** A service or repair, as the AI reads it from an invoice or a person suggests it. */
+export const addLogPresenter: DraftPresenter<AddLogInput> = {
+	actionId: 'vehicles.addLog',
+	kind: (c) => c.t('vehicles:kind_log'),
+	icon: Wrench,
+	title: (input, c) =>
+		input.vehicleName
+			? `${input.vehicleName} · ${c.t(`vehicles:log_kind_${input.kind ?? 'service'}`)}`
+			: c.t(`vehicles:log_kind_${input.kind ?? 'service'}`),
+	fields: (input, c) => [
+		{ label: c.t('vehicles:draft_date'), value: input.doneOn, path: 'doneOn' },
+		...(input.place
+			? [{ label: c.t('vehicles:draft_place'), value: input.place, path: 'place' }]
+			: []),
+		...(input.notes
+			? [{ label: c.t('vehicles:draft_notes'), value: input.notes, path: 'notes' }]
+			: []),
+	],
+	approveLabel: (c) => c.t('vehicles:draft_approve_log'),
+};

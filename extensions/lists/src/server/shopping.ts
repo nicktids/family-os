@@ -1,0 +1,559 @@
+import {
+	type Actor,
+	defineAction,
+	defineCapability,
+	defineEvent,
+	defineRoute,
+	FamosError,
+	type UnitOfWork,
+} from '@famos/sdk';
+import { sql } from 'kysely';
+import { z } from 'zod';
+import {
+	AddShoppingItemsSchema,
+	CATEGORIES,
+	CategorySchema,
+	ListNameSchema,
+	ReviewLabelSchema,
+	ShoppingItemIdSchema,
+	ShoppingItemSchema,
+	ShoppingListIdSchema,
+	ShoppingListSchema,
+	shoppingChangedPayload,
+} from '../contract/index.ts';
+import { type ItemRow, tables, titleKey, toItem } from './store.ts';
+import { listsView } from './tasks.ts';
+
+export const shoppingChanged = defineEvent('lists.shopping.changed', shoppingChangedPayload);
+
+/** What shopping protects: adding and ticking off items, and managing the lists. */
+export const shoppingEdit = defineCapability({
+	id: 'lists.shopping.edit',
+	label: 'lists:cap_shopping_edit',
+	level: 'use',
+});
+export const shoppingManage = defineCapability({
+	id: 'lists.shopping.manage',
+	label: 'lists:cap_shopping_manage',
+	level: 'edit',
+});
+const memberId = (actor: Actor) => (actor.kind === 'member' ? actor.memberId : null);
+
+async function activeList(uow: UnitOfWork, id: string | undefined) {
+	let query = tables(uow.db)
+		.selectFrom('lists_shopping_lists')
+		.selectAll()
+		.where('archived_at', 'is', null);
+	query = id ? query.where('id', '=', id) : query.orderBy('sort').orderBy('created_at');
+	const list = await query.executeTakeFirst();
+	if (!list)
+		throw new FamosError(
+			id ? 'not_found' : 'conflict',
+			id ? 'List not found' : 'There is no shopping list',
+		);
+	return list;
+}
+
+async function loadItem(uow: UnitOfWork, id: string) {
+	const row = await tables(uow.db)
+		.selectFrom('lists_shopping_items')
+		.selectAll()
+		.where('id', '=', id)
+		.where('deleted_at', 'is', null)
+		.executeTakeFirst();
+	if (!row) throw new FamosError('not_found', 'Item not found');
+	return row;
+}
+
+export const addShoppingItems = defineAction({
+	id: 'lists.addShoppingItems',
+	offline: true,
+	title: 'Add items to a shopping list',
+	requires: shoppingEdit.id,
+	autoApprove: {
+		label: 'lists:auto_approve_shopping',
+		capabilities: [shoppingManage.id, shoppingEdit.id],
+	},
+	description:
+		'Items already on the list are not duplicated (a new quantity replaces the old one); bought items come back. Without a category, the one last used for the product is reused.',
+	input: AddShoppingItemsSchema,
+	output: z.object({
+		listId: z.string(),
+		items: z.array(ShoppingItemSchema),
+		/** Items this call created (others were already on the list and only updated). */
+		addedIds: z.array(z.string()),
+	}),
+	// Undo removes what was added; items that were already there stay.
+	undo: (output) =>
+		output.addedIds.length
+			? { actionId: 'lists.removeShoppingItems', input: { ids: output.addedIds } }
+			: null,
+	// Every item is already on a list and not bought yet.
+	async alreadyThere(ctx, input) {
+		const { locale } = await ctx.family.settings();
+		const keys = input.items.map((item) => titleKey(item.title, locale));
+		const open = await tables(ctx.db)
+			.selectFrom('lists_shopping_items')
+			.select('title_key')
+			.where('title_key', 'in', keys)
+			.where('done_at', 'is', null)
+			.where('deleted_at', 'is', null)
+			.execute();
+		const found = new Set(open.map((row) => row.title_key));
+		return keys.every((key) => found.has(key));
+	},
+	ai: {
+		description:
+			'Adds things to buy to a family shopping list (groceries, household supplies, things someone needs for school).',
+		guidance:
+			'Only things the family must buy, not things to bring that a family usually already has (use a task for those). One item per product, titled in the family language with a capital first letter like a list entry ("Milk", not "milk"; brand names as written). The amount goes in quantity, never in the title: "2 litres of milk" is title "Milk", quantity "2 litres"; keep every amount the item gives, with its unit, as written ("2 kg", "1 pack", "a dozen"). Pick the store section as category when obvious. Omit listId unless a list is named.',
+	},
+	async run(uow, input) {
+		const list = await activeList(uow, input.listId);
+		const { locale } = await uow.family.settings();
+		const db = tables(uow.db);
+		const now = uow.clock.now();
+		const out: ItemRow[] = [];
+		const addedIds: string[] = [];
+		for (const item of input.items) {
+			const key = titleKey(item.title, locale);
+			const existing = await db
+				.selectFrom('lists_shopping_items')
+				.selectAll()
+				.where('list_id', '=', list.id)
+				.where('title_key', '=', key)
+				.where('deleted_at', 'is', null)
+				.orderBy(sql`done_at is not null`)
+				.orderBy('updated_at', 'desc')
+				.executeTakeFirst();
+			if (existing && existing.done_at === null && input.whenOnList === 'keep') {
+				out.push(existing);
+				continue;
+			}
+			if (existing) {
+				const patch = {
+					done_at: null,
+					done_by: null,
+					quantity: item.quantity !== undefined ? item.quantity : existing.quantity,
+					category: item.category ?? existing.category,
+					updated_at: now,
+				};
+				await db
+					.updateTable('lists_shopping_items')
+					.set(patch)
+					.where('id', '=', existing.id)
+					.execute();
+				out.push({ ...existing, ...patch });
+				continue;
+			}
+			const remembered = item.category
+				? undefined
+				: await db
+						.selectFrom('lists_shopping_items')
+						.select('category')
+						.where('title_key', '=', key)
+						.where('category', '!=', 'other')
+						.orderBy('updated_at', 'desc')
+						.executeTakeFirst();
+			const row: ItemRow = {
+				id: uow.ids.next('shop_item'),
+				list_id: list.id,
+				title: item.title,
+				title_key: key,
+				quantity: item.quantity ?? null,
+				category: item.category ?? remembered?.category ?? 'other',
+				done_at: null,
+				done_by: null,
+				added_by: memberId(uow.actor),
+				source_kind: null,
+				source_id: null,
+				created_at: now,
+				updated_at: now,
+				deleted_at: null,
+			};
+			await db.insertInto('lists_shopping_items').values(row).execute();
+			out.push(row);
+			addedIds.push(row.id);
+		}
+		uow.emit(shoppingChanged, { listId: list.id });
+		return { listId: list.id, items: out.map(toItem), addedIds };
+	},
+});
+
+export const updateShoppingItem = defineAction({
+	id: 'lists.updateShoppingItem',
+	title: 'Change a shopping item',
+	requires: shoppingEdit.id,
+	input: z.object({
+		id: ShoppingItemIdSchema,
+		title: z.string().trim().min(1).max(120).optional(),
+		quantity: z.string().trim().max(40).nullable().optional(),
+		category: CategorySchema.optional(),
+	}),
+	output: ShoppingItemSchema,
+	async run(uow, { id, title, quantity, category }) {
+		const row = await loadItem(uow, id);
+		const { locale } = await uow.family.settings();
+		const patch = {
+			...(title !== undefined && { title, title_key: titleKey(title, locale) }),
+			...(quantity !== undefined && { quantity }),
+			...(category !== undefined && { category }),
+			updated_at: uow.clock.now(),
+		};
+		await tables(uow.db)
+			.updateTable('lists_shopping_items')
+			.set(patch)
+			.where('id', '=', id)
+			.execute();
+		uow.emit(shoppingChanged, { listId: row.list_id });
+		return toItem({ ...row, ...patch });
+	},
+});
+
+export const checkShoppingItem = defineAction({
+	id: 'lists.checkShoppingItem',
+	offline: true,
+	title: 'Tick off (or untick) a shopping item',
+	requires: shoppingEdit.id,
+	input: z.object({ id: ShoppingItemIdSchema, done: z.boolean(), label: ReviewLabelSchema }),
+	output: ShoppingItemSchema,
+	undo: (item) => ({
+		actionId: 'lists.checkShoppingItem',
+		input: { id: item.id, done: item.doneAt === null },
+	}),
+	ai: {
+		description:
+			'Ticks off a shopping item as bought (done true), or puts it back on the list (done false). Find it with lists.shoppingList first.',
+	},
+	async run(uow, { id, done }) {
+		const row = await loadItem(uow, id);
+		if ((row.done_at !== null) === done) return toItem(row);
+		const now = uow.clock.now();
+		const patch = done
+			? { done_at: now, done_by: memberId(uow.actor), updated_at: now }
+			: { done_at: null, done_by: null, updated_at: now };
+		await tables(uow.db)
+			.updateTable('lists_shopping_items')
+			.set(patch)
+			.where('id', '=', id)
+			.execute();
+		uow.emit(shoppingChanged, { listId: row.list_id });
+		return toItem({ ...row, ...patch });
+	},
+});
+
+export const deleteShoppingItem = defineAction({
+	id: 'lists.deleteShoppingItem',
+	title: 'Remove a shopping item',
+	requires: shoppingEdit.id,
+	input: z.object({ id: ShoppingItemIdSchema, label: ReviewLabelSchema }),
+	output: z.object({ ok: z.literal(true), id: z.string() }),
+	undo: ({ id }) => ({ actionId: 'lists.restoreShoppingItem', input: { id } }),
+	ai: {
+		description:
+			'Removes an item from a shopping list (not bought, just no longer needed). Find it with lists.shoppingList first; to mark it bought use lists.checkShoppingItem.',
+	},
+	async run(uow, { id }) {
+		const row = await loadItem(uow, id);
+		const now = uow.clock.now();
+		await tables(uow.db)
+			.updateTable('lists_shopping_items')
+			.set({ deleted_at: now, updated_at: now })
+			.where('id', '=', id)
+			.execute();
+		uow.emit(shoppingChanged, { listId: row.list_id });
+		return { ok: true as const, id };
+	},
+});
+
+/** Takes back the removal of a shopping item. */
+export const restoreShoppingItem = defineAction({
+	id: 'lists.restoreShoppingItem',
+	title: 'Put a removed shopping item back',
+	requires: shoppingEdit.id,
+	input: z.object({ id: ShoppingItemIdSchema }),
+	output: ShoppingItemSchema,
+	async run(uow, { id }) {
+		const row = await tables(uow.db)
+			.selectFrom('lists_shopping_items')
+			.selectAll()
+			.where('id', '=', id)
+			.executeTakeFirst();
+		if (!row) throw new FamosError('not_found', 'Item not found');
+		const patch = { deleted_at: null, updated_at: uow.clock.now() };
+		await tables(uow.db)
+			.updateTable('lists_shopping_items')
+			.set(patch)
+			.where('id', '=', id)
+			.execute();
+		uow.emit(shoppingChanged, { listId: row.list_id });
+		return toItem({ ...row, ...patch });
+	},
+});
+
+export const removeShoppingItems = defineAction({
+	id: 'lists.removeShoppingItems',
+	title: 'Remove several shopping items',
+	requires: shoppingEdit.id,
+	input: z.object({ ids: z.array(ShoppingItemIdSchema).min(1).max(50) }),
+	output: z.object({ removed: z.number().int() }),
+	async run(uow, { ids }) {
+		const now = uow.clock.now();
+		const db = tables(uow.db);
+		const rows = await db
+			.selectFrom('lists_shopping_items')
+			.select('list_id')
+			.where('id', 'in', ids)
+			.where('deleted_at', 'is', null)
+			.execute();
+		const result = await db
+			.updateTable('lists_shopping_items')
+			.set({ deleted_at: now, updated_at: now })
+			.where('id', 'in', ids)
+			.where('deleted_at', 'is', null)
+			.executeTakeFirst();
+		for (const listId of new Set(rows.map((r) => r.list_id))) uow.emit(shoppingChanged, { listId });
+		return { removed: Number(result.numUpdatedRows) };
+	},
+});
+
+export const clearBought = defineAction({
+	id: 'lists.clearBought',
+	title: 'Clear the bought items of a list',
+	requires: shoppingEdit.id,
+	input: z.object({ listId: ShoppingListIdSchema }),
+	output: z.object({ cleared: z.number().int() }),
+	async run(uow, { listId }) {
+		const list = await activeList(uow, listId);
+		const now = uow.clock.now();
+		const result = await tables(uow.db)
+			.updateTable('lists_shopping_items')
+			.set({ deleted_at: now, updated_at: now })
+			.where('list_id', '=', list.id)
+			.where('done_at', 'is not', null)
+			.where('deleted_at', 'is', null)
+			.executeTakeFirst();
+		uow.emit(shoppingChanged, { listId: list.id });
+		return { cleared: Number(result.numUpdatedRows) };
+	},
+});
+
+/** Two lists may not share a name (case and spacing ignored): the chips would be ambiguous. */
+async function assertNameFree(uow: UnitOfWork, name: string, except?: string) {
+	const rows = await tables(uow.db)
+		.selectFrom('lists_shopping_lists')
+		.select(['id', 'name'])
+		.where('archived_at', 'is', null)
+		.execute();
+	const key = (n: string) => n.trim().toLocaleLowerCase();
+	if (rows.some((r) => r.id !== except && key(r.name) === key(name)))
+		throw new FamosError('conflict', 'A list with this name already exists', {
+			reason: 'name_taken',
+		});
+}
+
+export const createShoppingList = defineAction({
+	id: 'lists.createShoppingList',
+	title: 'Create a shopping list',
+	input: z.object({ name: ListNameSchema }),
+	output: ShoppingListSchema,
+	approval: { unless: shoppingManage.id },
+	async run(uow, { name }) {
+		await assertNameFree(uow, name);
+		const db = tables(uow.db);
+		const last = await db
+			.selectFrom('lists_shopping_lists')
+			.select((eb) => eb.fn.max('sort').as('sort'))
+			.executeTakeFirst();
+		const now = uow.clock.now();
+		const id = uow.ids.next('shop_list');
+		await db
+			.insertInto('lists_shopping_lists')
+			.values({
+				id,
+				name,
+				sort: Number(last?.sort ?? 0) + 1,
+				created_at: now,
+				updated_at: now,
+				archived_at: null,
+			})
+			.execute();
+		uow.emit(shoppingChanged, { listId: id });
+		return { id, name, openCount: 0 };
+	},
+});
+
+export const renameShoppingList = defineAction({
+	id: 'lists.renameShoppingList',
+	title: 'Rename a shopping list',
+	input: z.object({ id: ShoppingListIdSchema, name: ListNameSchema }),
+	output: z.object({ ok: z.literal(true) }),
+	approval: { unless: shoppingManage.id },
+	async run(uow, { id, name }) {
+		await activeList(uow, id);
+		await assertNameFree(uow, name, id);
+		await tables(uow.db)
+			.updateTable('lists_shopping_lists')
+			.set({ name, updated_at: uow.clock.now() })
+			.where('id', '=', id)
+			.execute();
+		uow.emit(shoppingChanged, { listId: id });
+		return { ok: true as const };
+	},
+});
+
+export const archiveShoppingList = defineAction({
+	id: 'lists.archiveShoppingList',
+	title: 'Remove a shopping list',
+	input: z.object({ id: ShoppingListIdSchema }),
+	output: z.object({ ok: z.literal(true) }),
+	approval: { unless: shoppingManage.id },
+	async run(uow, { id }) {
+		await activeList(uow, id);
+		const db = tables(uow.db);
+		const active = await db
+			.selectFrom('lists_shopping_lists')
+			.select('id')
+			.where('archived_at', 'is', null)
+			.execute();
+		if (active.length <= 1)
+			throw new FamosError('conflict', 'The last shopping list cannot be removed');
+		const now = uow.clock.now();
+		await db
+			.updateTable('lists_shopping_lists')
+			.set({ archived_at: now, updated_at: now })
+			.where('id', '=', id)
+			.execute();
+		uow.emit(shoppingChanged, { listId: id });
+		return { ok: true as const };
+	},
+});
+
+const MAX_SHOPPING = 100;
+/** What the model calls the list that has no name of its own. */
+const DEFAULT_LIST_LABEL = 'Shopping list';
+/** Names a person or the model may use for that list when asking for it by name. */
+const DEFAULT_LIST_ALIASES = [DEFAULT_LIST_LABEL, 'Groceries', 'Market'];
+
+export const shoppingList = defineAction({
+	id: 'lists.shoppingList',
+	title: 'Shopping lists with what is still to buy, for the AI',
+	input: z.object({
+		list: z.string().trim().max(60).optional().describe('Only the list with this name'),
+	}),
+	output: z.object({
+		lists: z.array(
+			z.object({
+				name: z.string(),
+				items: z.array(
+					z.object({
+						title: z.string(),
+						quantity: z.string().nullable(),
+						category: CategorySchema,
+					}),
+				),
+			}),
+		),
+	}),
+	readOnly: true,
+	requires: listsView.id,
+	ai: {
+		description:
+			'Shows what is still to buy on the family shopping lists (items not bought yet, in store-section order). Use it for "is there milk on the list / what do we need" questions.',
+	},
+	async run(uow, { list }) {
+		const { locale } = await uow.family.settings();
+		const wanted = list ? titleKey(list, locale) : null;
+		const lists = await tables(uow.db)
+			.selectFrom('lists_shopping_lists')
+			.selectAll()
+			.where('archived_at', 'is', null)
+			.orderBy('sort')
+			.orderBy('created_at')
+			.execute();
+		const chosen = lists.filter(
+			(l) =>
+				!wanted ||
+				(l.name ? [l.name] : DEFAULT_LIST_ALIASES).some((n) => titleKey(n, locale) === wanted),
+		);
+		let budget = MAX_SHOPPING;
+		const out = [];
+		for (const l of chosen) {
+			const rows = await tables(uow.db)
+				.selectFrom('lists_shopping_items')
+				.selectAll()
+				.where('list_id', '=', l.id)
+				.where('deleted_at', 'is', null)
+				.where('done_at', 'is', null)
+				.orderBy('created_at')
+				.limit(budget)
+				.execute();
+			budget -= rows.length;
+			const rank = (r: ItemRow) => CATEGORIES.indexOf(r.category);
+			out.push({
+				name: l.name || DEFAULT_LIST_LABEL,
+				items: rows
+					.sort((a, b) => rank(a) - rank(b))
+					.map((r) => ({ title: r.title, quantity: r.quantity, category: r.category })),
+			});
+		}
+		return { lists: out };
+	},
+});
+
+export const listShoppingLists = defineRoute({
+	method: 'get',
+	path: '/shopping/lists',
+	operationId: 'lists.listShoppingLists',
+	summary: 'Shopping lists with their number of items still to buy',
+	requires: listsView.id,
+	response: z.array(ShoppingListSchema),
+	async handle(ctx) {
+		const rows = await tables(ctx.db)
+			.selectFrom('lists_shopping_lists as l')
+			.leftJoin('lists_shopping_items as i', (join) =>
+				join
+					.onRef('i.list_id', '=', 'l.id')
+					.on('i.done_at', 'is', null)
+					.on('i.deleted_at', 'is', null),
+			)
+			.select(['l.id', 'l.name', (eb) => eb.fn.count<number>('i.id').as('openCount')])
+			.where('l.archived_at', 'is', null)
+			.groupBy('l.id')
+			.orderBy('l.sort')
+			.orderBy('l.created_at')
+			.execute();
+		return rows.map((r) => ({ id: r.id, name: r.name, openCount: Number(r.openCount) }));
+	},
+});
+
+/** Bought items stay visible for a week (or until cleared). */
+const BOUGHT_VISIBLE_MS = 7 * 86_400_000;
+
+export const listShoppingItems = defineRoute({
+	method: 'get',
+	path: '/shopping/lists/{listId}/items',
+	operationId: 'lists.listShoppingItems',
+	summary: 'Items to buy (in store-section order), then recently bought items',
+	requires: listsView.id,
+	params: z.object({ listId: ShoppingListIdSchema }),
+	response: z.array(ShoppingItemSchema),
+	async handle(ctx, { params }) {
+		const since = ctx.clock.now() - BOUGHT_VISIBLE_MS;
+		const rows = await tables(ctx.db)
+			.selectFrom('lists_shopping_items')
+			.selectAll()
+			.where('list_id', '=', params.listId)
+			.where('deleted_at', 'is', null)
+			.where((eb) => eb.or([eb('done_at', 'is', null), eb('done_at', '>=', since)]))
+			.execute();
+		const order = (r: ItemRow) => CATEGORIES.indexOf(r.category);
+		const open = rows
+			.filter((r) => r.done_at === null)
+			.sort((a, b) => order(a) - order(b) || a.created_at - b.created_at);
+		const bought = rows
+			.filter((r) => r.done_at !== null)
+			.sort((a, b) => (b.done_at as number) - (a.done_at as number));
+		return [...open, ...bought].map(toItem);
+	},
+});

@@ -1,0 +1,165 @@
+import type {
+	AnyActionDefinition,
+	AnyJobDefinition,
+	AnyRouteDefinition,
+	CapabilityDefinition,
+	EventDefinition,
+	ExtensionDefinition,
+	NotificationKindDefinition,
+} from '@famos/sdk';
+import { assertRestrictiveDefaults } from '@famos/sdk';
+
+export interface Registry {
+	/** Extensions in dependency order (dependencies first). */
+	readonly extensions: readonly ExtensionDefinition[];
+	readonly actions: ReadonlyMap<string, AnyActionDefinition>;
+	readonly jobs: ReadonlyMap<string, AnyJobDefinition>;
+	readonly events: ReadonlyMap<string, EventDefinition>;
+	readonly routes: readonly { extension: string; route: AnyRouteDefinition }[];
+	/** All capabilities, core's first. */
+	readonly capabilities: readonly CapabilityDefinition[];
+	/** All notification kinds by id, core's first. */
+	readonly notificationKinds: ReadonlyMap<string, NotificationKindDefinition>;
+}
+
+const ROUTE_ACCESS = new Set(['public', 'trusted-device', 'signedIn']);
+
+/** Orders extensions so that every extension comes after its dependencies. */
+export function orderExtensions(extensions: readonly ExtensionDefinition[]): ExtensionDefinition[] {
+	const byId = new Map<string, ExtensionDefinition>();
+	for (const ext of extensions) {
+		if (byId.has(ext.id)) throw new Error(`Duplicate extension id "${ext.id}"`);
+		byId.set(ext.id, ext);
+	}
+	const ordered: ExtensionDefinition[] = [];
+	const state = new Map<string, 'visiting' | 'done'>();
+	const visit = (ext: ExtensionDefinition, path: string[]) => {
+		const s = state.get(ext.id);
+		if (s === 'done') return;
+		if (s === 'visiting')
+			throw new Error(`Extension dependency cycle: ${[...path, ext.id].join(' → ')}`);
+		state.set(ext.id, 'visiting');
+		for (const dep of ext.dependsOn) {
+			const target = byId.get(dep);
+			if (!target) throw new Error(`Extension "${ext.id}" depends on missing extension "${dep}"`);
+			visit(target, [...path, ext.id]);
+		}
+		state.set(ext.id, 'done');
+		ordered.push(ext);
+	};
+	for (const ext of [...extensions].sort((a, b) => a.id.localeCompare(b.id))) visit(ext, []);
+	return ordered;
+}
+
+/** Collects all contributions and rejects duplicates across extensions. */
+export function buildRegistry(
+	extensions: readonly ExtensionDefinition[],
+	infrastructureJobs: readonly AnyJobDefinition[] = [],
+): Registry {
+	const ordered = orderExtensions(extensions);
+	const actions = new Map<string, AnyActionDefinition>();
+	const jobs = new Map<string, AnyJobDefinition>();
+	const events = new Map<string, EventDefinition>();
+	const operationIds = new Set<string>();
+	const routes: Registry['routes'][number][] = [];
+
+	const unique = <T>(map: Map<string, T>, key: string, value: T, kind: string) => {
+		if (map.has(key)) throw new Error(`Duplicate ${kind} "${key}"`);
+		map.set(key, value);
+	};
+
+	for (const ext of ordered) {
+		for (const action of ext.actions) unique(actions, action.id, action, 'action');
+		for (const job of ext.jobs) unique(jobs, job.name, job, 'job');
+		for (const event of ext.events) {
+			unique(events, event.name, event, 'event');
+		}
+		for (const route of ext.routes) {
+			if (operationIds.has(route.operationId))
+				throw new Error(`Duplicate operationId "${route.operationId}"`);
+			operationIds.add(route.operationId);
+			routes.push({ extension: ext.id, route });
+		}
+	}
+	for (const job of infrastructureJobs) unique(jobs, job.name, job, 'job');
+	const capabilities = new Map<string, CapabilityDefinition>();
+	for (const ext of [...ordered].sort(
+		(a, b) => Number(b.id === 'core') - Number(a.id === 'core'),
+	)) {
+		for (const capability of ext.capabilities) {
+			assertRestrictiveDefaults(ext.id, capability);
+			unique(capabilities, capability.id, capability, 'capability');
+		}
+	}
+	const notificationKinds = new Map<string, NotificationKindDefinition>();
+	for (const ext of [...ordered].sort(
+		(a, b) => Number(b.id === 'core') - Number(a.id === 'core'),
+	)) {
+		for (const kind of ext.notifications) {
+			if (!kind.id.startsWith(`${ext.id}.`))
+				throw new Error(`Notification kind "${kind.id}" must be namespaced as "${ext.id}.…"`);
+			unique(notificationKinds, kind.id, kind, 'notification kind');
+		}
+	}
+	const known = (id: string | undefined, where: string) => {
+		if (id !== undefined && !capabilities.has(id))
+			throw new Error(`${where} names unknown capability "${id}"`);
+	};
+	for (const kind of notificationKinds.values())
+		known(kind.audience, `Notification kind "${kind.id}"`);
+	for (const action of actions.values()) {
+		known(action.requires, `Action "${action.id}"`);
+		const unless = typeof action.approval === 'object' ? action.approval.unless : undefined;
+		known(unless, `Action "${action.id}"`);
+		if (!action.readOnly && !action.requires && !unless) {
+			throw new Error(
+				`Action "${action.id}" changes data but declares neither \`requires\` nor \`approval: { unless }\``,
+			);
+		}
+		// AI changes must always be drafts: an AI-proposable action cannot skip approval.
+		// A read-only action with AI hints is a read tool and changes nothing.
+		if (action.ai && !action.readOnly && action.approval === 'never') {
+			throw new Error(`Action "${action.id}" has AI hints but would apply AI changes directly`);
+		}
+		// The AI has no way out: an action that sends data outside is never AI-proposable.
+		if (action.ai && action.external) {
+			throw new Error(`Action "${action.id}" is external and cannot have AI hints`);
+		}
+	}
+	// Auto-approval only for ordinary, internal, non-sensitive data changes.
+	for (const ext of ordered) {
+		for (const action of ext.actions) {
+			if (!action.autoApprove) continue;
+			const where = `Action "${action.id}"`;
+			if (action.readOnly || action.external || ext.id === 'core' || ext.sensitive)
+				throw new Error(`${where} cannot be auto-approved`);
+			for (const id of action.autoApprove.capabilities) known(id, where);
+		}
+	}
+	for (const ext of ordered) {
+		for (const id of [ext.ai?.context ?? []].flat()) {
+			const action = actions.get(id);
+			if (!action || !ext.actions.includes(action))
+				throw new Error(`Extension "${ext.id}" names AI context action "${id}", which it lacks`);
+			if (!action.readOnly) throw new Error(`AI context action "${id}" must be read-only`);
+		}
+	}
+	for (const ext of ordered) {
+		for (const [kind, def] of Object.entries(ext.ai?.index?.kinds ?? {})) {
+			known(def.capability, `Search kind "${kind}"`);
+			known(def.viewAll, `Search kind "${kind}"`);
+		}
+	}
+	for (const { route } of routes) {
+		if (!ROUTE_ACCESS.has(route.requires)) known(route.requires, `Route "${route.operationId}"`);
+	}
+	return {
+		extensions: ordered,
+		actions,
+		jobs,
+		events,
+		routes,
+		capabilities: [...capabilities.values()],
+		notificationKinds,
+	};
+}

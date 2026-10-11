@@ -1,0 +1,33 @@
+# FamilyOS — `docker compose up -d`, then open http://localhost:3000
+services:
+  famos:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    image: familyos:local
+    ports:
+      - "3000:3000"
+    volumes:
+      - famos-data:/data
+    environment:
+      # Public URL of this instance. Must be HTTPS for installing the PWA / Share Target on phones.
+      FAMOS_BASE_URL: ${FAMOS_BASE_URL:-http://localhost:3000}
+      TZ: ${TZ:-UTC}
+      # Optional: FAMOS_SECRET (generated and stored in the volume if unset), FAMOS_BACKUP_HOUR, LOG_LEVEL
+      # Optional: an AI provider kept in line with these on every start (or add one in More → AI):
+      # FAMOS_AI_PROVIDER: openrouter          # or ollama (with the profile below: FAMOS_AI_BASE_URL=http://ollama:11434/v1)
+      # FAMOS_AI_API_KEY: sk-or-...
+      # FAMOS_AI_MODEL: google/gemini-2.5-flash
+    restart: unless-stopped
+
+  # Optional local AI: `docker compose --profile ollama up -d`
+  ollama:
+    image: ollama/ollama:latest
+    profiles: ["ollama"]
+    volumes:
+      - ollama-data:/root/.ollama
+    restart: unless-stopped
+
+volumes:
+  famos-data:
+  ollama-data:

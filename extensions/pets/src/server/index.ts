@@ -1,0 +1,31 @@
+import { defineExtension } from '@famos/sdk';
+import { petsEdit, petsView } from './capabilities.ts';
+import {
+	addPet,
+	addTreatment,
+	aiContext,
+	archivePet,
+	getPet,
+	listPets,
+	listTreatments,
+	petChanged,
+	removeTreatment,
+	updatePet,
+} from './pets.ts';
+import { migrations } from './store.ts';
+
+/**
+ * Pets: the household's animals with a treatment history. Their duties (vaccines, parasite
+ * treatment, check-ups) and papers are kept by `records`, reached only through its actions.
+ * The AI learns which pets exist through `pets.aiContext`.
+ */
+export default defineExtension({
+	id: 'pets',
+	dependsOn: ['records'],
+	migrations,
+	ai: { context: aiContext.id },
+	actions: [addPet, updatePet, archivePet, addTreatment, removeTreatment, aiContext],
+	routes: [listPets, getPet, listTreatments],
+	events: [petChanged],
+	capabilities: [petsView, petsEdit],
+});

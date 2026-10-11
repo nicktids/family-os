@@ -1,0 +1,50 @@
+{
+	"name": "@famos/web",
+	"version": "0.1.0",
+	"license": "AGPL-3.0-or-later",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"dev": "vite dev",
+		"build": "vite build",
+		"preview": "vite preview",
+		"gen": "svelte-kit sync",
+		"typecheck": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --fail-on-warnings && tsc -p src/service-worker --noEmit"
+	},
+	"imports": {
+		"#lib": "./src/lib/index.ts",
+		"#lib/*": "./src/lib/*"
+	},
+	"dependencies": {
+		"@famos/api-client": "workspace:*",
+		"@famos/ext-ambient": "workspace:*",
+		"@famos/ext-assistant": "workspace:*",
+		"@famos/ext-board": "workspace:*",
+		"@famos/ext-calendar": "workspace:*",
+		"@famos/ext-chores": "workspace:*",
+		"@famos/ext-home": "workspace:*",
+		"@famos/ext-inbox": "workspace:*",
+		"@famos/ext-kitchen": "workspace:*",
+		"@famos/ext-lists": "workspace:*",
+		"@famos/ext-pets": "workspace:*",
+		"@famos/ext-records": "workspace:*",
+		"@famos/ext-vehicles": "workspace:*",
+		"@famos/i18n": "workspace:*",
+		"@famos/ui": "workspace:*",
+		"@famos/time": "workspace:*",
+		"@lucide/svelte": "1.52.0",
+		"i18next": "26.4.2",
+		"uqr": "0.1.3"
+	},
+	"devDependencies": {
+		"@sveltejs/adapter-static": "4.0.0",
+		"@sveltejs/kit": "3.0.0",
+		"@sveltejs/vite-plugin-svelte": "7.3.1",
+		"@tailwindcss/vite": "4.3.3",
+		"svelte": "5.57.1",
+		"svelte-check": "4.7.6",
+		"tailwindcss": "4.3.3",
+		"typescript": "6.0.3",
+		"vite": "8.3.2"
+	}
+}

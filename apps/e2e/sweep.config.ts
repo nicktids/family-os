@@ -1,0 +1,15 @@
+import { defineConfig, devices } from '@playwright/test';
+
+/**
+ * The design sweep (`pnpm sweep`): screenshots of every page for a UI review, not a test and not
+ * part of `pnpm e2e`. Same servers and prepared family as the suite (support/).
+ */
+export default defineConfig({
+	testDir: './sweep',
+	fullyParallel: true,
+	reporter: 'list',
+	timeout: 1_200_000,
+	globalSetup: './support/global-setup.ts',
+	globalTeardown: './support/global-teardown.ts',
+	use: { ...devices['Pixel 7'] },
+});

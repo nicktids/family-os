@@ -1,0 +1,40 @@
+{
+	"name": "@famos/adapters",
+	"version": "0.0.0",
+	"license": "AGPL-3.0-or-later",
+	"private": true,
+	"type": "module",
+	"exports": {
+		"./queue-sqlite": "./src/queue-sqlite/index.ts",
+		"./files-fs": "./src/files-fs/index.ts",
+		"./http-guard": "./src/http-guard/index.ts",
+		"./runtime": "./src/runtime/index.ts",
+		"./identity-betterauth": "./src/identity-betterauth/index.ts",
+		"./llm-aisdk": "./src/llm-aisdk/index.ts",
+		"./webpush": "./src/webpush/index.ts",
+		"./telegram": "./src/telegram/index.ts",
+		"./telegram/fake-bot-api": "./src/telegram/fake-bot-api.ts",
+		"./email": "./src/email/index.ts",
+		"./backup": "./src/backup/index.ts"
+	},
+	"scripts": {
+		"typecheck": "tsc -p ."
+	},
+	"dependencies": {
+		"@ai-sdk/openai-compatible": "3.0.63",
+		"@famos/sdk": "workspace:*",
+		"@famos/time": "workspace:*",
+		"age-encryption": "0.3.1",
+		"ai": "7.0.128",
+		"aws4fetch": "1.0.20",
+		"better-auth": "1.7.7",
+		"grammy": "1.46.0",
+		"imapflow": "2.2.6",
+		"kysely": "0.29.6",
+		"postal-mime": "4.0.4",
+		"zod": "4.6.5"
+	},
+	"devDependencies": {
+		"@famos/db": "workspace:*"
+	}
+}

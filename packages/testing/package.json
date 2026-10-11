@@ -1,0 +1,25 @@
+{
+	"name": "@famos/testing",
+	"version": "0.0.0",
+	"license": "AGPL-3.0-or-later",
+	"private": true,
+	"type": "module",
+	"exports": {
+		".": "./src/index.ts",
+		"./contracts": "./src/contracts/index.ts"
+	},
+	"scripts": {
+		"typecheck": "tsc -p ."
+	},
+	"dependencies": {
+		"@famos/adapters": "workspace:*",
+		"@famos/core": "workspace:*",
+		"@famos/db": "workspace:*",
+		"@famos/i18n": "workspace:*",
+		"@famos/sdk": "workspace:*",
+		"vitest": "5.0.3"
+	},
+	"devDependencies": {
+		"zod": "4.6.5"
+	}
+}

@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/onurceri/family-os/security/advisories/new
+    about: Please report security problems privately, never in a public issue.
+  - name: User guide
+    url: https://github.com/onurceri/family-os/blob/main/docs/guide/README.md
+    about: Installation, HTTPS and phones, backups, AI providers and every feature.

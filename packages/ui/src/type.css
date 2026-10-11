@@ -1,0 +1,73 @@
+/*
+ * The type roles of the pages other than Today: they keep their
+ * page templates and take the style's ramp (styles.css) for these roles only. The
+ * fallbacks are the page templates' sizes, for a page drawn before a style is set. In the
+ * components layer, so a utility class on the same element still wins.
+ */
+@layer components {
+	/* Page titles: the body face, at the style's size. */
+	.type-page {
+		font-family: var(--font-family);
+		font-size: var(--ramp-page, 1.5rem);
+		font-weight: 800;
+		letter-spacing: var(--ramp-page-tracking, -0.015em);
+		line-height: 1.15;
+	}
+	@media (width < 48rem) {
+		.type-page {
+			font-size: var(--ramp-page-phone, 1.5rem);
+		}
+	}
+
+	/* A record's name. */
+	.type-record {
+		font-family: var(--font-family);
+		font-size: var(--ramp-record, 1.625rem);
+		font-weight: 800;
+		letter-spacing: var(--ramp-page-tracking, -0.015em);
+		line-height: 1.15;
+	}
+
+	/* Big numbers on a page (totals) and the day number of a day head: the display face. */
+	.type-figure,
+	.type-day {
+		font-family: var(--font-family-display, var(--style-font-display, var(--font-family)));
+		font-weight: var(--ramp-numeral-weight, 800);
+		font-stretch: var(--ramp-numeral-stretch, 100%);
+		font-variant-numeric: tabular-nums;
+		line-height: 1.1;
+	}
+	.type-figure {
+		font-size: var(--ramp-figure, 1.5rem);
+		letter-spacing: -0.01em;
+	}
+	.type-day {
+		font-size: var(--ramp-day, 1.125rem);
+	}
+
+	/* A greeting that opens a page (the assistant's new conversation): the serif in Broadsheet,
+	   the condensed display face in Lanes, the bold body face in Wall. */
+	.type-greeting {
+		font-family: var(--ramp-greeting-font, var(--font-family));
+		font-size: var(--ramp-greeting, 2rem);
+		font-weight: var(--ramp-greeting-weight, 800);
+		font-stretch: var(--ramp-greeting-stretch, 100%);
+		letter-spacing: var(--ramp-greeting-tracking, -0.02em);
+		line-height: 1.1;
+		text-wrap: balance;
+	}
+	@media (width < 48rem) {
+		.type-greeting {
+			font-size: var(--ramp-greeting-phone, 1.75rem);
+		}
+	}
+
+	/* A date line: the serif where the style has one (Broadsheet's italic), else the body face. */
+	.type-dateline {
+		font-family: var(--font-family-serif, var(--style-font-serif, var(--font-family)));
+		font-size: var(--ramp-dateline, 1.125rem);
+		font-style: var(--ramp-dateline-style, normal);
+		font-weight: var(--ramp-dateline-weight, 700);
+		line-height: 1.15;
+	}
+}

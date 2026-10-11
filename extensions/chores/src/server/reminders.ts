@@ -1,0 +1,77 @@
+import { defineJob, defineNotificationKind } from '@famos/sdk';
+import { dayBounds, epochOf } from '@famos/time';
+import { z } from 'zod';
+import { CHORES_VIEW } from '../contract/index.ts';
+import { type ChoreRow, tables } from './store.ts';
+
+/**
+ * Chore reminders: on the day a chore is due, at 09:00 family time, whoever is up
+ * hears about it. A chore anyone may do reminds nobody. One `chores.remind` job per chore is
+ * planned in the transaction of every change; it carries the due date and the `updated_at` it was
+ * planned for, so a job that no longer matches (done, edited, handed over, archived) does nothing.
+ */
+export const choreDueKind = defineNotificationKind({
+	id: 'chores.choreDue',
+	label: 'chores:notify_kind_chore_due',
+	audience: CHORES_VIEW,
+});
+
+const REMIND_TIME = '09:00';
+/** A reminder may be this late at scheduling time (clock drift) and still go out. */
+const LATE_MS = 5 * 60_000;
+
+const RemindPayload = z.object({
+	choreId: z.string(),
+	dueDate: z.string(),
+	version: z.number(),
+});
+
+type Enqueue = (
+	job: string,
+	payload: unknown,
+	options?: { runAt?: number; dedupeKey?: string },
+) => Promise<unknown>;
+
+/** Plans the reminder of a chore as it is now. */
+export async function scheduleChoreReminder(
+	enqueue: Enqueue,
+	row: ChoreRow,
+	now: number,
+	timeZone: string,
+): Promise<void> {
+	if (row.archived_at !== null || !row.next_due || !row.assignee_id) return;
+	const at = epochOf(row.next_due, REMIND_TIME, timeZone);
+	if (at < now - LATE_MS) return;
+	await enqueue(
+		'chores.remind',
+		{ choreId: row.id, dueDate: row.next_due, version: row.updated_at },
+		{ runAt: at, dedupeKey: `chores.remind:${row.id}:${row.next_due}:${row.updated_at}` },
+	);
+}
+
+export const remindJob = defineJob({
+	name: 'chores.remind',
+	payload: RemindPayload,
+	async handle(ctx, { choreId, dueDate, version }) {
+		const row = await tables(ctx.db)
+			.selectFrom('chores_chores')
+			.selectAll()
+			.where('id', '=', choreId)
+			.executeTakeFirst();
+		if (!row || row.archived_at !== null || !row.assignee_id) return;
+		if (row.updated_at !== version || row.next_due !== dueDate) return;
+
+		const { timeZone } = await ctx.family.settings();
+		// The job may have waited a long time (server down): do not remind about a past day.
+		if (ctx.clock.now() >= dayBounds(dueDate, timeZone).end) return;
+		await ctx.notify({
+			kind: choreDueKind.id,
+			to: { members: [row.assignee_id] },
+			title: { key: 'chores:chore_due_title', params: { title: row.title } },
+			body: { key: 'chores:chore_due_today' },
+			url: '/chores',
+			source: { kind: 'chores.chore', id: row.id },
+			dedupeKey: `reminder:${row.id}:${dueDate}`,
+		});
+	},
+});

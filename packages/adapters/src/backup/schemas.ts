@@ -1,0 +1,132 @@
+import { z } from 'zod';
+
+/** An http(s) address without credentials; a trailing slash is dropped. */
+const Address = z
+	.string()
+	.trim()
+	.max(500)
+	.transform((value, ctx) => {
+		try {
+			const url = new URL(value);
+			if (
+				(url.protocol !== 'https:' && url.protocol !== 'http:') ||
+				url.username ||
+				url.password ||
+				url.search ||
+				url.hash
+			)
+				throw new Error('bad');
+			return url.toString().replace(/\/+$/, '');
+		} catch {
+			ctx.addIssue({
+				code: 'custom',
+				message: 'Use an http(s) address without user name, password or query',
+			});
+			return z.NEVER;
+		}
+	});
+
+/** A folder inside a bucket: letters, digits and `._-/` only, no leading or trailing slash. */
+const Prefix = z
+	.string()
+	.trim()
+	.max(200)
+	.regex(/^[A-Za-z0-9._\-/]*$/, 'Use letters, digits and . _ - / only')
+	.transform((v) => v.replace(/^\/+|\/+$/g, ''));
+
+export const S3ConfigSchema = z.object({
+	endpoint: Address,
+	region: z.string().trim().min(1).max(60).default('us-east-1'),
+	bucket: z
+		.string()
+		.trim()
+		.regex(/^[a-zA-Z0-9][a-zA-Z0-9.\-_]{1,61}[a-zA-Z0-9]$/, 'Not a valid bucket name'),
+	prefix: Prefix.default(''),
+	accessKeyId: z.string().trim().min(1).max(200),
+	secretAccessKey: z.string().min(1).max(500),
+	/** `https://host/bucket/key` instead of `https://bucket.host/key` (MinIO, R2, many others). */
+	pathStyle: z.boolean().default(false),
+});
+export type S3Config = z.infer<typeof S3ConfigSchema>;
+
+export const WebDavConfigSchema = z.object({
+	/** The folder to write into, e.g. `https://cloud/remote.php/dav/files/anna/FamilyOS`. */
+	url: Address,
+	username: z.string().trim().min(1).max(200),
+	password: z.string().min(1).max(500),
+});
+export type WebDavConfig = z.infer<typeof WebDavConfigSchema>;
+
+const Name = z.string().trim().min(1).max(60);
+const Keep = z.number().int().min(1).max(365);
+
+export const TargetInputSchema = z.discriminatedUnion('kind', [
+	z.object({
+		kind: z.literal('s3'),
+		name: Name,
+		keep: Keep.default(7),
+		config: S3ConfigSchema,
+	}),
+	z.object({
+		kind: z.literal('webdav'),
+		name: Name,
+		keep: Keep.default(7),
+		config: WebDavConfigSchema,
+	}),
+]);
+export type TargetInput = z.infer<typeof TargetInputSchema>;
+
+/** Changes to a target. Credentials left out keep their value; `kind` cannot change. */
+export const TargetPatchSchema = z.object({
+	name: Name.optional(),
+	keep: Keep.optional(),
+	enabled: z.boolean().optional(),
+	config: z.record(z.string(), z.union([z.string(), z.boolean()])).optional(),
+});
+export type TargetPatch = z.infer<typeof TargetPatchSchema>;
+
+/** What the settings page may see of a target's configuration: never a secret. */
+export const TargetSummarySchema = z.object({
+	endpoint: z.string().optional(),
+	region: z.string().optional(),
+	bucket: z.string().optional(),
+	prefix: z.string().optional(),
+	pathStyle: z.boolean().optional(),
+	url: z.string().optional(),
+	username: z.string().optional(),
+});
+
+export const TargetStatusSchema = z.object({
+	id: z.string(),
+	kind: z.enum(['s3', 'webdav']),
+	name: z.string(),
+	keep: z.number().int(),
+	enabled: z.boolean(),
+	lastRunAt: z.number().int().nullable(),
+	/** `ok`, or a code such as `http_403`, `unreachable`, `timeout`, `unreadable`. */
+	lastResult: z.string().nullable(),
+	lastSize: z.number().int().nullable(),
+	createdAt: z.number().int(),
+	summary: TargetSummarySchema,
+});
+export type TargetStatus = z.infer<typeof TargetStatusSchema>;
+
+export const EncryptionModeSchema = z.enum(['unset', 'passphrase', 'recipient', 'none']);
+export type EncryptionMode = z.infer<typeof EncryptionModeSchema>;
+
+export const EncryptionStatusSchema = z.object({
+	mode: EncryptionModeSchema,
+	/** The `age1…` key in recipient mode. */
+	recipient: z.string().nullable(),
+});
+export type EncryptionStatus = z.infer<typeof EncryptionStatusSchema>;
+
+export const EncryptionInputSchema = z.discriminatedUnion('mode', [
+	z.object({ mode: z.literal('passphrase'), passphrase: z.string().min(12).max(500) }),
+	z.object({ mode: z.literal('recipient'), recipient: z.string().trim().min(10).max(200) }),
+	z.object({ mode: z.literal('none') }),
+]);
+export type EncryptionInput = z.infer<typeof EncryptionInputSchema>;
+
+export const TestResultSchema = z.object({ ok: z.boolean(), code: z.string() });
+export type TestResult = z.infer<typeof TestResultSchema>;

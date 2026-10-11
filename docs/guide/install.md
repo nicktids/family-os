@@ -1,0 +1,52 @@
+# Install
+
+FamilyOS runs as one Docker container. A Raspberry Pi 4 is enough.
+
+## Start it
+
+```bash
+git clone https://github.com/onurceri/family-os && cd family-os
+docker compose up -d
+docker compose logs famos
+```
+
+The log prints an address ending in `/setup?code=…`. Open it in a browser.
+
+1. Pick the language (**Choose your language**) and press **Continue**. It is preselected from your browser. It becomes the family's language, and everyone can choose their own later (see [Languages](languages.md)).
+2. Enter your name, an email and a password (at least 10 characters). The setup code is already filled in.
+3. Tick **This device is shared at home (people with a PIN can sign in here)** if you are on the family tablet (see [Family members, roles and devices](members.md)).
+4. Press **Create account**. That account is an **admin**.
+5. Optionally, **Where do you live?**: search for your city to show the weather on Today and on displays, or press **Skip**. Only the name you search for is sent to Open-Meteo.com. You can change it later under **Settings → Family → Photos and weather**.
+
+While creating the account you choose the 12- or 24-hour clock and Celsius or Fahrenheit; both start from what your browser suggests. The time zone and the date, number and week formats come from your browser. You can change all of them under **Settings → Family → Language & region** (see [Region and formats](region.md)).
+
+The code makes sure that only you can set up a new instance, even if it is reachable from the internet before you get to it. It is also stored in the data volume as `setup-code`. To choose it yourself, set `FAMOS_SETUP_CODE` (at least 8 characters).
+
+Everything lives in the `famos-data` volume (`/data` in the container):
+
+| Path | What |
+|---|---|
+| `famos.db` | The database (SQLite) |
+| `files/` | Shared photos and documents |
+| `backups/` | Nightly backups |
+| `languages/` | Language packs you installed |
+| `secret` | Signs sessions and encrypts saved keys and passwords; see [Backups](backups.md) |
+| `setup-code` | The setup code |
+
+Settings that are not in the app are environment variables. The table is in the README.
+
+## Add the family
+
+Open **Settings → Family → Members** and add each person with a role. **Admin** can do everything, **Member** is for adults, **Supervised** is for children and anyone whose changes should be checked, **Guest** can only look. Who can do what, how people sign in and how to set up the kitchen tablet is on [Family members, roles and devices](members.md).
+
+## Turn parts off
+
+**Settings → Family → Features** lists the **Parts of FamilyOS**. Switch a part off, such as the calendar, the lists, or Quick add, and it is hidden and stopped for everyone. Nothing is deleted: turn it back on and everything is as it was.
+
+## Update
+
+```bash
+git pull && docker compose up -d --build
+```
+
+FamilyOS writes a backup before any update that changes the database, and keeps people signed in.

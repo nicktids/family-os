@@ -1,0 +1,293 @@
+<script lang="ts">
+	import type { Component, Snippet } from 'svelte';
+	import type { DraftField } from '../slots.js';
+	import ConfirmButton from './ConfirmButton.svelte';
+
+	/**
+	 * A draft proposed by AI (or a child) waiting for a parent.
+	 * Pending: coral ring, fields, uncertain fields marked "check this", Reject (two taps) ·
+	 * Edit · Approve. Applied: green ring. Rejected, undone or expired: receded. Failed: error and
+	 * retry.
+	 * Labels come from the app so this component stays i18n-free.
+	 */
+	export type DraftCardStatus =
+		'pending' | 'applied' | 'rejected' | 'failed' | 'undone' | 'expired';
+	export interface DraftCardLabels {
+		approve: string;
+		edit: string;
+		save: string;
+		cancel: string;
+		reject: string;
+		rejectConfirm: string;
+		checkThis: string;
+		applied: string;
+		rejected: string;
+		retry: string;
+		/** Shown instead of the buttons to people who cannot decide (children). */
+		waiting?: string;
+		/** Shown after an applied draft was taken back. */
+		undone?: string;
+		/** Shown when nobody decided it and the day it was about has passed. */
+		expired?: string;
+		/** The button that takes an applied draft back. */
+		undo?: string;
+		/** Shown on a pending draft that seems to exist already. */
+		mayExist?: string;
+	}
+
+	let {
+		kind,
+		icon,
+		title,
+		source,
+		fields,
+		uncertain = [],
+		mayExist = false,
+		status,
+		error,
+		labels,
+		busy = false,
+		canDecide = true,
+		compact = false,
+		editor,
+		onapprove,
+		onreject,
+		onsave,
+		onundo,
+		selectable,
+		quiet = false,
+		oneditchange,
+	}: {
+		kind: string;
+		icon?: Component;
+		title: string;
+		source?: string;
+		fields: readonly DraftField[];
+		uncertain?: readonly string[];
+		/** What it proposes seems to be there already (same title and date). */
+		mayExist?: boolean;
+		status: DraftCardStatus;
+		error?: string | null;
+		labels: DraftCardLabels;
+		busy?: boolean;
+		/** False for people who may not approve (children see the proposal and a waiting note). */
+		canDecide?: boolean;
+		/** A decided draft as one flat row (wide layouts); pending drafts are unchanged. */
+		compact?: boolean;
+		/** Inline editor (from the extension's presenter); shown in edit mode. */
+		editor?: Snippet;
+		onapprove: () => void;
+		onreject: () => void;
+		/** Approve with the edited input; omit to hide "Edit". */
+		onsave?: () => void;
+		/** Shown on an applied draft that can still be taken back; omit to hide "Undo". */
+		onundo?: () => void;
+		/**
+		 * A suggestion in a group that is decided together: a checkbox instead of Approve and
+		 * Reject (the group has the buttons); Edit stays. Only for people who may decide.
+		 */
+		selectable?: { checked: boolean; label: string; onchange(checked: boolean): void };
+		/**
+		 * Inside a group of suggestions on its own page: a calm card (no alarm ring); a ticked one
+		 * has a soft outline, an unticked one recedes.
+		 */
+		quiet?: boolean;
+		/** Tells the group when the editor opens or closes, so it can give the card the whole row. */
+		oneditchange?: (editing: boolean) => void;
+	} = $props();
+
+	let editing = $state(false);
+	$effect(() => oneditchange?.(editing));
+	const unsure = (f: DraftField) =>
+		[...(f.path ? [f.path] : []), ...(f.paths ?? [])].some((p) => uncertain.includes(p));
+	const picking = $derived(
+		Boolean(selectable) && canDecide && (status === 'pending' || status === 'failed'),
+	);
+	/** What a draft that did not go in says. */
+	const settled = $derived(
+		status === 'undone'
+			? (labels.undone ?? labels.rejected)
+			: status === 'expired'
+				? (labels.expired ?? labels.rejected)
+				: labels.rejected,
+	);
+	const ring = $derived(
+		quiet && (status === 'pending' || status === 'failed')
+			? picking && !selectable?.checked
+				? 'bg-idle ring-1 ring-border'
+				: picking
+					? 'ring-2 ring-ink/20'
+					: 'ring-1 ring-border'
+			: status === 'pending' || status === 'failed'
+				? picking && !selectable?.checked
+					? 'ring-1 ring-border opacity-80'
+					: 'ring-2 ring-attention'
+				: status === 'applied'
+					? 'ring-2 ring-now'
+					: 'opacity-60',
+	);
+</script>
+
+{#if compact && status !== 'pending' && status !== 'failed'}
+	<article
+		class="bg-surface flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl border px-4 py-3 {status ===
+		'applied'
+			? ''
+			: 'opacity-60'}"
+		aria-busy={busy}
+	>
+		<span class="text-ink-soft text-xs font-bold tracking-wider uppercase">{kind}</span>
+		<h3 class="min-w-0 flex-1 truncate text-sm font-extrabold">{title}</h3>
+		<p
+			class="{status === 'applied' ? 'text-now' : 'text-ink-soft'} text-sm font-bold"
+			role="status"
+		>
+			{#if status === 'applied'}✓ {labels.applied}{:else}{settled}{/if}
+		</p>
+		{#if status === 'applied' && onundo && labels.undo}
+			<button
+				type="button"
+				disabled={busy}
+				class="bg-idle min-h-11 rounded-lg px-4 text-sm font-bold disabled:opacity-50"
+				onclick={onundo}
+			>
+				{labels.undo}
+			</button>
+		{/if}
+	</article>
+{:else}
+	<article class="bg-surface shadow-lit grid gap-3 rounded-xl p-4 {ring}" aria-busy={busy}>
+		<div class={picking ? 'flex items-start gap-3' : 'contents'}>
+			{#if picking && selectable}
+				<input
+					type="checkbox"
+					checked={selectable.checked}
+					onchange={(e) => selectable.onchange(e.currentTarget.checked)}
+					aria-label={selectable.label}
+					disabled={busy}
+					class="accent-ink mt-0.5 size-6 shrink-0"
+				/>
+			{/if}
+			<div class={picking ? 'grid min-w-0 flex-1 gap-3' : 'contents'}>
+				<div
+					class="text-ink-soft flex items-center gap-2 text-xs font-bold tracking-wider uppercase"
+				>
+					{#if icon}{@const Icon = icon}<Icon class="size-4" aria-hidden="true" />{/if}
+					<span>{kind}</span>
+				</div>
+				<h3 class="text-lg leading-snug font-extrabold text-balance">{title}</h3>
+				{#if source}<p class="text-ink-soft -mt-2 text-xs">{source}</p>{/if}
+			</div>
+		</div>
+
+		{#if status === 'applied'}
+			<p class="text-now text-sm font-bold" role="status">✓ {labels.applied}</p>
+			{#if onundo && labels.undo}
+				<button
+					type="button"
+					disabled={busy}
+					class="bg-idle min-h-11 justify-self-start rounded-lg px-4 font-bold disabled:opacity-50"
+					onclick={onundo}
+				>
+					{labels.undo}
+				</button>
+			{/if}
+		{:else if status === 'rejected' || status === 'undone' || status === 'expired'}
+			<p class="text-ink-soft text-sm" role="status">{settled}</p>
+		{:else if editing && editor}
+			<!-- The editor sizes its fields from this container, not from the window. -->
+			<div class="@container grid gap-3">{@render editor()}</div>
+			<div class="flex flex-wrap gap-2">
+				<button
+					type="button"
+					class="text-ink-soft min-h-11 rounded-lg px-3 font-bold"
+					onclick={() => (editing = false)}
+				>
+					{labels.cancel}
+				</button>
+				<button
+					type="button"
+					disabled={busy}
+					class="bg-now text-on-color min-h-11 flex-1 rounded-lg px-3 font-bold disabled:opacity-50"
+					onclick={() => {
+						editing = false;
+						onsave?.();
+					}}
+				>
+					{labels.save}
+				</button>
+			</div>
+		{:else}
+			<dl class="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-sm">
+				{#each fields as field (field.label)}
+					<dt class="text-ink-soft">{field.label}</dt>
+					<dd class="font-semibold">
+						<span
+							class={unsure(field)
+								? 'decoration-attention underline decoration-dashed underline-offset-4'
+								: ''}
+						>
+							{field.value}
+						</span>
+						{#if unsure(field)}<span class="text-attention ml-1 text-xs font-medium"
+								>· {labels.checkThis}</span
+							>{/if}
+					</dd>
+				{/each}
+			</dl>
+			{#if mayExist && status === 'pending' && labels.mayExist}
+				<p class="text-attention text-sm font-semibold">{labels.mayExist}</p>
+			{/if}
+			{#if status === 'failed' && error}
+				<p class="text-attention text-sm font-semibold" role="alert">{error}</p>
+			{/if}
+			{#if !canDecide}
+				<p class="text-ink-soft text-sm font-semibold">{labels.waiting}</p>
+			{:else if picking}
+				{#if onsave && editor}
+					<div class="flex">
+						<button
+							type="button"
+							disabled={busy}
+							class="bg-idle min-h-11 rounded-lg px-4 font-bold disabled:opacity-50"
+							onclick={() => (editing = true)}
+						>
+							{labels.edit}
+						</button>
+					</div>
+				{/if}
+			{:else}
+				<div class="flex flex-wrap items-center gap-2">
+					<ConfirmButton
+						label={labels.reject}
+						confirmLabel={labels.rejectConfirm}
+						onconfirm={onreject}
+						disabled={busy}
+					/>
+					{#if onsave && editor}
+						<button
+							type="button"
+							disabled={busy}
+							class="bg-idle min-h-11 rounded-lg px-4 font-bold disabled:opacity-50"
+							onclick={() => (editing = true)}
+						>
+							{labels.edit}
+						</button>
+					{/if}
+					<button
+						type="button"
+						disabled={busy}
+						class={[
+							'min-h-11 rounded-lg px-4 font-bold disabled:opacity-50',
+							// Quiet (inside a conversation or a capture): an ordinary filled button at the end.
+							quiet ? 'bg-ink text-wall ms-auto' : 'bg-attention text-on-color flex-1',
+						]}
+						onclick={onapprove}
+					>
+						{status === 'failed' ? labels.retry : labels.approve}
+					</button>
+				</div>
+			{/if}
+		{/if}
+	</article>
+{/if}

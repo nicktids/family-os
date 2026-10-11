@@ -1,0 +1,426 @@
+import type {
+	ActionInvoker,
+	Actor,
+	AiActionInfo,
+	AnyActionDefinition,
+	AnyJobDefinition,
+	Clock,
+	DbExecutor,
+	EventBus,
+	ExtensionContext,
+	ExtensionDefinition,
+	ExternalHttp,
+	FileStore,
+	IdentityAdmin,
+	IdGenerator,
+	JobContext,
+	JobQueue,
+	LlmPort,
+	Logger,
+	Migrations,
+	NotificationChannel,
+	NotifyRequest,
+	SecretBox,
+} from '@famos/sdk';
+import { z } from 'zod';
+import { type Access, createAccess } from './access.ts';
+import { type ActionRunner, createActionRunner } from './action-runner.ts';
+import { type AiAreas, createAiAreas } from './ai-areas.ts';
+import { mayUseAsAi } from './ai-tools.ts';
+import { type ApiTokenService, createApiTokenService } from './api-tokens.ts';
+import { DEFAULT_DRAFT_NOTIFY_DELAY_MS } from './auto-approval.ts';
+import { aiAreasChanged, featuresChanged, memberChanged, roleChanged } from './core-events.ts';
+import { createCoreExtension } from './core-extension.ts';
+import { createDeviceService, type DeviceService } from './devices.ts';
+import { createEventBus, type InProcessEventBus } from './event-bus.ts';
+import { familyReader } from './family.ts';
+import { createFeatures, type Features, ownerOf } from './features.ts';
+import { anyLanguage, type LanguagePort } from './languages.ts';
+import {
+	createNotifications,
+	defaultTranslate,
+	noVocabulary,
+	type Translate,
+	type Vocabulary,
+} from './notifications.ts';
+import { buildRegistry, type Registry } from './registry.ts';
+import { createSearch, SEARCH_ACTION, SYNC_JOB } from './search.ts';
+import { createThemes, defaultThemes, type ThemePort, type Themes } from './themes.ts';
+import { createWorker, type Worker, type WorkerOptions } from './worker.ts';
+
+export interface KernelOptions {
+	db: DbExecutor;
+	queue: JobQueue;
+	clock: Clock;
+	ids: IdGenerator;
+	logger: Logger;
+	files: FileStore;
+	/** Seals credentials at rest with a key derived from `FAMOS_SECRET`. */
+	secrets: SecretBox;
+	/** Guarded outbound HTTP for extensions' jobs (SSRF protection, size cap, timeout). */
+	http: ExternalHttp;
+	identity: IdentityAdmin;
+	/** Model access for background jobs only. */
+	llm: LlmPort;
+	extensions: readonly ExtensionDefinition[];
+	/** Migrations owned by infrastructure adapters (queue, identity), run after core. */
+	infrastructureMigrations: readonly { scope: string; migrations: Migrations }[];
+	/**
+	 * Jobs owned by infrastructure adapters (backup uploads), registered next to the extensions'.
+	 * Names are `<scope>.<step>` like any job; the scope is the adapter's migration scope.
+	 */
+	infrastructureJobs?: readonly AnyJobDefinition[];
+	appVersion: string;
+	/** The one-time code first-run setup requires (the server always sets one). */
+	setupCode?: string;
+	worker?: WorkerOptions;
+	/** Ways to reach people outside the app. None by default: the in-app list only. */
+	channels?: readonly NotificationChannel[];
+	/** Renders a translation key in a locale (the server builds it from the shared catalogs). */
+	translate?: Translate;
+	/** The words a key lists in every installed language; none by default. */
+	vocabulary?: Vocabulary;
+	/** The language packs available. Without one, English is listed and any well-formed code may be chosen. */
+	languages?: LanguagePort;
+	/** The theme packs available. Without one, only the default theme is listed. */
+	themes?: ThemePort;
+	/** How long a suggestion waits before it notifies approvers (default 30 s; shortened in E2E). */
+	draftNotifyDelayMs?: number;
+}
+
+export interface Kernel {
+	readonly registry: Registry;
+	readonly ctx: ExtensionContext;
+	readonly runner: ActionRunner;
+	readonly bus: InProcessEventBus;
+	readonly worker: Worker;
+	readonly devices: DeviceService;
+	/** Personal API tokens for MCP clients. */
+	readonly apiTokens: ApiTokenService;
+	/** Capabilities and roles. */
+	readonly access: Access;
+	/** Extensions turned on or off (Settings → Features). */
+	readonly features: Features;
+	/** What the AI may use per area (Settings → AI). */
+	readonly aiAreas: AiAreas;
+	/** Notification channels, in registration order. */
+	readonly channels: readonly NotificationChannel[];
+	/** Renders a translation key in a language (English when the language lacks it). */
+	readonly translate: Translate;
+	/** The language packs available. */
+	readonly languages: LanguagePort;
+	/** Theme packs and who chose which theme. */
+	readonly themes: Themes;
+	/** All migration scopes in execution order: core, infrastructure, extensions. */
+	readonly migrationScopes: readonly { scope: string; migrations: Migrations }[];
+	/** Family search follows the AI settings: run after a model, provider or area changes. */
+	reconcileSearch(): Promise<void>;
+	/** Calls every extension's `register`. Run after migrations. */
+	start(): Promise<void>;
+	stop(): Promise<void>;
+}
+
+export function createKernel(options: KernelOptions): Kernel {
+	const bus = createEventBus(options.logger);
+	const devices = createDeviceService({
+		db: options.db,
+		clock: options.clock,
+		ids: options.ids,
+		bus,
+		identity: options.identity,
+		access: () => access,
+		features: () => features,
+	});
+	const apiTokens = createApiTokenService({
+		db: options.db,
+		clock: options.clock,
+		ids: options.ids,
+		access: () => access,
+	});
+	let runner: ActionRunner | undefined;
+	const features = createFeatures();
+	const aiAreas = createAiAreas(
+		(id) => registry.extensions.find((e) => e.id === id)?.sensitive === true,
+	);
+	const channels = options.channels ?? [];
+	const notifications = createNotifications({
+		db: options.db,
+		queue: options.queue,
+		clock: options.clock,
+		ids: options.ids,
+		logger: options.logger,
+		channels,
+		translate: options.translate ?? defaultTranslate,
+		registry: () => registry,
+		access: () => access,
+		features: () => features,
+		wake: () => worker?.wake(),
+	});
+	const search = createSearch({
+		db: options.db,
+		clock: options.clock,
+		ids: options.ids,
+		logger: options.logger,
+		llm: options.llm,
+		registry: () => registry,
+		access: () => access,
+		aiAreas: () => aiAreas,
+		features: () => features,
+		invoke: (id, input, actor) => (runner as ActionRunner).invoke(id, input, actor),
+	});
+	const themes = createThemes({ themes: () => options.themes ?? defaultThemes });
+	const core = createCoreExtension({
+		themes,
+		search,
+		identity: options.identity,
+		appVersion: options.appVersion,
+		...(options.setupCode !== undefined && { setupCode: options.setupCode }),
+		draftNotifyDelayMs: options.draftNotifyDelayMs ?? DEFAULT_DRAFT_NOTIFY_DELAY_MS,
+		languages: () => options.languages ?? anyLanguage,
+		devices: () => devices,
+		access: () => access,
+		features: () => features,
+		extensionIds: () => registry.extensions.map((e) => e.id),
+		extensions: () =>
+			registry.extensions.map((e) => ({
+				id: e.id,
+				sensitive: e.sensitive,
+				usesAi: e.actions.some((a) => a.ai !== undefined),
+			})),
+		aiAreas: () => aiAreas,
+		registry: () => registry,
+		notifications,
+		runner: () => {
+			if (!runner) throw new Error('Kernel not initialised');
+			return runner;
+		},
+	});
+	const registry = buildRegistry([core, ...options.extensions], options.infrastructureJobs);
+	const access = createAccess(
+		registry.capabilities,
+		(id) => features.isOn(id),
+		(id) => aiAreas.access(id),
+	);
+	// Custom roles are cached; reload them whenever one changes (after its transaction commits).
+	bus.on(roleChanged, () => access.refresh(options.db));
+	bus.on(featuresChanged, async () => {
+		await features.refresh(options.db);
+		access.invalidate();
+		worker?.wake();
+		await reconcileSearch();
+	});
+	bus.on(aiAreasChanged, async () => {
+		await aiAreas.refresh(options.db);
+		await reconcileSearch();
+	});
+	// Archiving a member removes their sign-in. Requests are refused anyway (the actor must be active),
+	// this also removes the stored sessions and credentials. Runs after the commit: identity shares the connection.
+	bus.on(memberChanged, async ({ memberId, endSessions }) => {
+		if (endSessions) {
+			// Removes the sign-in too (password, PIN, sessions): the email can be used again.
+			await options.identity.revokeAll(memberId);
+			await apiTokens.revokeForMember(memberId);
+		}
+	});
+
+	let worker: Worker | undefined;
+	/** Whether an embedding model is set: without one, search is not offered to the AI. */
+	let embedReady = false;
+	const refreshEmbedReady = async () => {
+		try {
+			const policy = await options.llm.policy('search', 'embed');
+			embedReady = policy.enabled && policy.model !== null;
+		} catch {
+			embedReady = false;
+		}
+	};
+	/**
+	 * Family search follows the settings: after a change of an area, a feature, a
+	 * model or a provider, one job removes what must go and rebuilds what must come.
+	 */
+	const reconcileSearch = async () => {
+		await refreshEmbedReady();
+		if (!search.hasIndex()) return;
+		await ctx.enqueue(SYNC_JOB, {}, { dedupeKey: SYNC_JOB });
+	};
+	runner = createActionRunner({
+		indexer: (enqueue, trx) => search.indexerFor(enqueue, trx),
+		db: options.db,
+		queue: options.queue,
+		clock: options.clock,
+		ids: options.ids,
+		logger: options.logger,
+		files: options.files,
+		secrets: options.secrets,
+		bus,
+		registry,
+		access,
+		features,
+		aiAreaAccess: (id) => aiAreas.access(id),
+		notifier: notifications.notifier,
+		translate: options.translate ?? defaultTranslate,
+		vocabulary: options.vocabulary ?? noVocabulary,
+		onJobsEnqueued: () => worker?.wake(),
+		...(options.draftNotifyDelayMs !== undefined && {
+			draftNotifyDelayMs: options.draftNotifyDelayMs,
+		}),
+	});
+
+	const aiInfo = (a: AnyActionDefinition) => ({
+		id: a.id,
+		title: a.title,
+		description: a.ai?.description ?? '',
+		...(a.ai?.guidance && { guidance: a.ai.guidance }),
+		inputSchema: z.toJSONSchema(a.input, { io: 'input', unrepresentable: 'any' }) as Record<
+			string,
+			unknown
+		>,
+	});
+	const aiActions = [...registry.actions.values()].filter((a) => a.ai);
+	const aiDraftActions = aiActions.filter((a) => !a.readOnly).map((a) => [a, aiInfo(a)] as const);
+	const aiReadActions = aiActions.filter((a) => a.readOnly).map((a) => [a, aiInfo(a)] as const);
+	const aiContexts = registry.extensions.flatMap((e) =>
+		e.ai?.context ? [[e.id, [e.ai.context].flat()] as const] : [],
+	);
+	const offered = (
+		list: readonly (readonly [AnyActionDefinition, AiActionInfo])[],
+		catalogOptions: { local?: boolean; actor?: Actor } | undefined,
+	) =>
+		list
+			.filter(([a]) => {
+				const owner = ownerOf(a.id);
+				// Meant for a person's own request in the in-app assistant: not for the Inbox, which
+				// reads shared content, and not for MCP clients.
+				const forMember = catalogOptions?.actor;
+				if (
+					a.ai?.assistantOnly &&
+					!(
+						forMember?.kind === 'ai' &&
+						forMember.onBehalfOf !== undefined &&
+						forMember.source === 'assistant'
+					)
+				)
+					return false;
+				if (!features.isOn(owner)) return false;
+				if (a.id === SEARCH_ACTION && !embedReady) return false;
+				const area = aiAreas.access(owner);
+				if (area === 'off' || (area === 'local' && catalogOptions?.local !== true)) return false;
+				return !catalogOptions?.actor || mayUseAsAi(access, a, catalogOptions.actor);
+			})
+			.map(([, info]) => info);
+	const actions: ActionInvoker = {
+		invoke: (id, input, actor, invokeOptions) =>
+			(runner as ActionRunner).invoke(id, input, actor, invokeOptions),
+		// Not offered to the AI: actions of turned-off extensions, of areas that are off for the AI,
+		// and of local-only areas unless the model that will see the catalog is local.
+		// For an AI acting for a member, also actions that member could not use.
+		aiCatalog: (catalogOptions) => offered(aiDraftActions, catalogOptions),
+		aiReadTools: (catalogOptions) => offered(aiReadActions, catalogOptions),
+		aiContextActions: () =>
+			new Map(aiContexts.filter(([extensionId]) => features.isOn(extensionId))),
+		checkInput(id, input) {
+			const def = registry.actions.get(id);
+			if (!def) return [];
+			const parsed = def.input.safeParse(input);
+			return parsed.success
+				? []
+				: parsed.error.issues.map(
+						(i: { path: readonly PropertyKey[]; message: string }) =>
+							`${i.path.map(String).join('.') || '(input)'}: ${i.message}`,
+					);
+		},
+	};
+	const ctx: ExtensionContext = {
+		db: options.db,
+		clock: options.clock,
+		ids: options.ids,
+		logger: options.logger,
+		files: options.files,
+		secrets: options.secrets,
+		http: options.http,
+		events: bus,
+		actions,
+		family: familyReader(options.db),
+		translate: options.translate ?? defaultTranslate,
+		vocabulary: options.vocabulary ?? noVocabulary,
+		access,
+		ai: search.indexerFor(
+			(job, payload, enqueueOptions) => ctx.enqueue(job, payload, enqueueOptions),
+			null,
+		),
+		async notify(request: NotifyRequest) {
+			await notifications.notifier.enqueue(options.db, request);
+			worker?.wake();
+		},
+		async enqueue(job, payload, enqueueOptions) {
+			const def = registry.jobs.get(job);
+			if (!def) throw new Error(`Unknown job "${job}"`);
+			const id = await options.queue.enqueue(options.db, job, def.payload.parse(payload), {
+				maxAttempts: def.maxAttempts,
+				...enqueueOptions,
+			});
+			worker?.wake();
+			return id;
+		},
+	};
+	const jobCtx: JobContext = { ...ctx, llm: options.llm };
+	worker = createWorker({
+		queue: options.queue,
+		registry,
+		ctx: jobCtx,
+		clock: options.clock,
+		logger: options.logger,
+		isOn: (id) => features.isOn(id),
+		...(options.worker && { options: options.worker }),
+	});
+
+	const coreFirst = registry.extensions.filter((e) => e.id === 'core');
+	const rest = registry.extensions.filter((e) => e.id !== 'core');
+	const migrationScopes = [
+		...coreFirst.map((e) => ({ scope: e.id, migrations: e.migrations })),
+		...options.infrastructureMigrations,
+		...rest.map((e) => ({ scope: e.id, migrations: e.migrations })),
+	];
+
+	return {
+		registry,
+		ctx,
+		runner,
+		bus,
+		worker,
+		devices,
+		apiTokens,
+		access,
+		features,
+		aiAreas,
+		channels,
+		translate: options.translate ?? defaultTranslate,
+		languages: options.languages ?? anyLanguage,
+		themes,
+		migrationScopes,
+		reconcileSearch,
+		async start() {
+			await access.refresh(options.db);
+			await features.refresh(options.db);
+			await aiAreas.refresh(options.db);
+			// Event handlers of a turned-off extension do not run.
+			for (const ext of registry.extensions)
+				await ext.register?.({ ...ctx, events: gatedEvents(bus, () => features.isOn(ext.id)) });
+			await reconcileSearch();
+		},
+		async stop() {
+			await worker?.stop();
+		},
+	};
+}
+
+/** The bus, with subscriptions that only fire while their extension is on. */
+function gatedEvents(bus: InProcessEventBus, isOn: () => boolean): EventBus {
+	return {
+		...bus,
+		on: (event, handler) =>
+			bus.on(event, (payload) => {
+				if (isOn()) return handler(payload);
+			}),
+	};
+}

@@ -1,0 +1,48 @@
+import { defineWebExtension } from '@famos/ui/slots';
+import { House } from '@lucide/svelte';
+import { addHomePresenter, addItemPresenter, updateItemPresenter } from './presenters.js';
+
+/**
+ * Home UI: the Home page (homes), one page per home (`/home/:id`), per thing
+ * (`/home/items/:id`) and per service (`/home/services/:id`), each rendering the `record.section`
+ * slot so `records` shows what needs doing and the papers, and homes, things and services as
+ * choices for the Inbox's "Add to…".
+ */
+export default defineWebExtension({
+	id: 'home',
+	labelKey: 'home:feature_name',
+	descriptionKey: 'home:feature_description',
+	nav: [
+		{
+			id: 'home.nav',
+			path: '/home',
+			labelKey: 'home:nav',
+			icon: House,
+			placement: 'more',
+			group: 'household',
+			order: 20,
+			requires: 'home.view',
+		},
+	],
+	pages: [
+		// One component for the list and a record, so opening one keeps the list mounted (read once).
+		{ id: 'home.page', path: '/home', component: () => import('./HomePage.svelte') },
+		{ id: 'home.home', path: '/home/:id', component: () => import('./HomePage.svelte') },
+		{ id: 'home.item', path: '/home/items/:id', component: () => import('./ItemPage.svelte') },
+		{
+			id: 'home.service',
+			path: '/home/services/:id',
+			component: () => import('./ServicePage.svelte'),
+		},
+	],
+	slots: [
+		{
+			slot: 'inbox.fileTarget',
+			id: 'home.fileTarget',
+			order: 20,
+			requires: 'home.view',
+			component: () => import('./FileTargetHome.svelte'),
+		},
+	],
+	drafts: [addHomePresenter, addItemPresenter, updateItemPresenter],
+});

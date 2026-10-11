@@ -1,0 +1,30 @@
+import { defineCapability, defineEvent } from '@famos/sdk';
+import { z } from 'zod';
+import { eventChangedPayload } from '../contract/index.ts';
+
+/** What the calendar protects: seeing it, changing it directly, and its connections. */
+export const calendarView = defineCapability({
+	id: 'calendar.view',
+	label: 'calendar:cap_view',
+	level: 'view',
+});
+export const calendarEdit = defineCapability({
+	id: 'calendar.edit',
+	label: 'calendar:cap_edit',
+	level: 'edit',
+});
+/** Subscriptions to external calendars, and feeds of the whole family. */
+export const calendarManage = defineCapability({
+	id: 'calendar.manage',
+	label: 'calendar:cap_manage',
+	level: 'manage',
+});
+
+export const eventChanged = defineEvent('calendar.event.changed', eventChangedPayload);
+/** A subscription was added, changed, removed or refreshed (the agenda reloads). */
+export const subscriptionChanged = defineEvent(
+	'calendar.subscription.changed',
+	z.object({ subscriptionId: z.string() }),
+);
+/** A tag was renamed, recoloured or deleted (the agenda reloads). */
+export const tagChanged = defineEvent('calendar.tag.changed', z.object({ name: z.string() }));

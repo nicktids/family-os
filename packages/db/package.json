@@ -1,0 +1,22 @@
+{
+	"name": "@famos/db",
+	"version": "0.0.0",
+	"license": "AGPL-3.0-or-later",
+	"private": true,
+	"type": "module",
+	"exports": {
+		".": "./src/index.ts"
+	},
+	"scripts": {
+		"typecheck": "tsc -p ."
+	},
+	"dependencies": {
+		"@famos/sdk": "workspace:*",
+		"better-sqlite3": "13.0.3",
+		"kysely": "0.29.6",
+		"tar": "7.5.22"
+	},
+	"devDependencies": {
+		"@types/better-sqlite3": "9.6.0"
+	}
+}

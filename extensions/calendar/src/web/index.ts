@@ -1,0 +1,59 @@
+import { defineWebExtension } from '@famos/ui/slots';
+import { CalendarDays, CalendarRange, Smartphone } from '@lucide/svelte';
+import { changeEventPresenter, createEventPresenter, deleteEventPresenter } from './presenter.js';
+import { calendarTimeline } from './timeline.js';
+
+/** Calendar UI: the Calendar tab, its events on the Today timeline and the Inbox presenter for proposed events. */
+export default defineWebExtension({
+	id: 'calendar',
+	labelKey: 'calendar:feature_name',
+	descriptionKey: 'calendar:feature_description',
+	nav: [
+		{
+			id: 'calendar.nav',
+			path: '/calendar',
+			labelKey: 'calendar:nav',
+			icon: CalendarDays,
+			placement: 'primary',
+			order: 20,
+		},
+		// Settings: the personal feed addresses (You) and the family's subscriptions and tags (Family).
+		{
+			id: 'calendar.feedSettings',
+			path: '/settings/calendar-feed',
+			labelKey: 'calendar:nav_feed',
+			icon: Smartphone,
+			placement: 'more',
+			group: 'settings',
+			section: 'you',
+			order: 50,
+			requires: 'calendar.view',
+		},
+		{
+			id: 'calendar.calendarsSettings',
+			path: '/settings/calendars',
+			labelKey: 'calendar:nav_calendars',
+			icon: CalendarRange,
+			placement: 'more',
+			group: 'settings',
+			section: 'family',
+			order: 50,
+			requires: 'calendar.manage',
+		},
+	],
+	pages: [
+		{ id: 'calendar.page', path: '/calendar', component: () => import('./CalendarPage.svelte') },
+		{
+			id: 'calendar.feeds',
+			path: '/settings/calendar-feed',
+			component: () => import('./FeedsPage.svelte'),
+		},
+		{
+			id: 'calendar.calendars',
+			path: '/settings/calendars',
+			component: () => import('./CalendarsPage.svelte'),
+		},
+	],
+	timeline: [calendarTimeline],
+	drafts: [createEventPresenter, changeEventPresenter, deleteEventPresenter],
+});

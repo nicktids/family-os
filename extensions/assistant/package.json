@@ -1,0 +1,42 @@
+{
+	"name": "@famos/ext-assistant",
+	"version": "0.0.0",
+	"license": "AGPL-3.0-or-later",
+	"private": true,
+	"type": "module",
+	"exports": {
+		"./messages/*": "./src/messages/*",
+		"./contract": "./src/contract/index.ts",
+		"./server": "./src/server/index.ts",
+		"./web": {
+			"svelte": "./src/web/index.ts",
+			"default": "./src/web/index.ts"
+		}
+	},
+	"scripts": {
+		"typecheck": "tsc -p . && svelte-check --tsconfig ./tsconfig.web.json --fail-on-warnings"
+	},
+	"dependencies": {
+		"@famos/api-client": "workspace:*",
+		"@famos/i18n": "workspace:*",
+		"@famos/sdk": "workspace:*",
+		"@famos/time": "workspace:*",
+		"@famos/ui": "workspace:*",
+		"@lucide/svelte": "1.52.0",
+		"kysely": "0.29.6",
+		"zod": "4.6.5"
+	},
+	"peerDependencies": {
+		"svelte": "5.57.1"
+	},
+	"devDependencies": {
+		"@famos/ext-calendar": "workspace:*",
+		"@famos/ext-lists": "workspace:*",
+		"@famos/ext-records": "workspace:*",
+		"@famos/ext-vehicles": "workspace:*",
+		"@famos/testing": "workspace:*",
+		"svelte": "5.57.1",
+		"svelte-check": "4.7.6",
+		"typescript": "6.0.3"
+	}
+}

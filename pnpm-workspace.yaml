@@ -1,0 +1,12 @@
+packages:
+  - apps/*
+  - packages/*
+  - extensions/*
+
+allowBuilds:
+  esbuild: true
+
+peerDependencyRules:
+  allowedVersions:
+    # openapi-typescript 7.13 declares typescript ^5 but works with TS 6 (verified by `pnpm gen`).
+    openapi-typescript>typescript: '6'

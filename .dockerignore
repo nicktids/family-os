@@ -1,0 +1,12 @@
+**/node_modules
+**/dist
+**/build
+**/.svelte-kit
+**/.turbo
+**/coverage
+.git
+.vitest
+data
+docs
+apps/e2e/test-results
+apps/e2e/playwright-report

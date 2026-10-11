@@ -1,0 +1,48 @@
+{
+	"name": "@famos/server",
+	"version": "0.1.0",
+	"license": "AGPL-3.0-or-later",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"dev": "tsx watch --clear-screen=false src/main.ts serve",
+		"typecheck": "tsc -p .",
+		"gen": "tsx src/main.ts openapi openapi.json",
+		"build": "node build.mjs"
+	},
+	"dependencies": {
+		"@famos/adapters": "workspace:*",
+		"@famos/core": "workspace:*",
+		"@famos/db": "workspace:*",
+		"@famos/ext-ambient": "workspace:*",
+		"@famos/ext-assistant": "workspace:*",
+		"@famos/ext-board": "workspace:*",
+		"@famos/ext-calendar": "workspace:*",
+		"@famos/ext-chores": "workspace:*",
+		"@famos/ext-home": "workspace:*",
+		"@famos/ext-inbox": "workspace:*",
+		"@famos/ext-kitchen": "workspace:*",
+		"@famos/ext-lists": "workspace:*",
+		"@famos/ext-pets": "workspace:*",
+		"@famos/ext-records": "workspace:*",
+		"@famos/ext-vehicles": "workspace:*",
+		"@famos/i18n": "workspace:*",
+		"@famos/sdk": "workspace:*",
+		"@famos/themes": "workspace:*",
+		"@hono/node-server": "2.1.3",
+		"@hono/zod-openapi": "1.6.3",
+		"@modelcontextprotocol/hono": "2.0.2",
+		"@modelcontextprotocol/server": "2.3.1",
+		"better-sqlite3": "13.0.3",
+		"hono": "4.13.13",
+		"ws": "8.22.0",
+		"zod": "4.6.5"
+	},
+	"devDependencies": {
+		"@famos/testing": "workspace:*",
+		"@modelcontextprotocol/client": "2.3.1",
+		"@types/ws": "8.18.2",
+		"esbuild": "0.28.2",
+		"tsx": "4.23.15"
+	}
+}

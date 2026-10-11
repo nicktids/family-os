@@ -1,0 +1,120 @@
+/*
+ * The type ramp of each style: sizes are code, never theme tokens, so a pack can
+ * never make text unreadable.
+ * Fonts: `--style-font-*` are the style's defaults for the slots a theme leaves
+ * empty (`STYLES` in styles.ts); the body font stays the theme's `--font-family`.
+ *
+ *   clock      the clock                    hero      the next-up title
+ *   countdown  the countdown's number       date      the date line
+ *   big        big numbers (temperature)    sentence  the weather sentence, quiet notes
+ *   label      tracked caps labels (`--ramp-label-tracking` their tracking)
+ *
+ * The rest of the app keeps its templates and takes these through the role
+ * classes in type.css:
+ *
+ *   page       page titles (`-phone` below 48 rem, `-tracking` their tracking)
+ *   record     a record's name
+ *   figure     totals and other big numbers on a page (the display face)
+ *   day        the day number in a day head (the display face)
+ *   dateline   a date line on a page (the serif where the style has one; `-style`, `-weight`)
+ *   numeral    the weight and width of the display face for numbers
+ *   greeting   a greeting that opens a page (`-font`, `-weight`, `-stretch`, `-phone`)
+ */
+
+/* Broadsheet: the sizes of the wall at 1440; the composition sets
+   smaller values for the 1024 band and the phone. */
+[data-style="broadsheet"] {
+	--style-font-display: "Barlow Condensed", var(--font-family);
+	--style-font-serif: "Instrument Serif", ui-serif, Georgia, serif;
+	--ramp-clock: 7.75rem;
+	--ramp-countdown: 8rem;
+	--ramp-big: 4rem;
+	--ramp-hero: 3.375rem;
+	--ramp-date: 2.125rem;
+	--ramp-sentence: 1.25rem;
+	--ramp-label: 0.6875rem;
+	--ramp-label-tracking: 0.12em;
+	--ramp-page: 1.75rem;
+	--ramp-page-phone: 1.625rem;
+	--ramp-page-tracking: -0.015em;
+	--ramp-record: 1.875rem;
+	--ramp-figure: 2rem;
+	--ramp-day: 1.375rem;
+	--ramp-dateline: 1.5rem;
+	--ramp-dateline-style: italic;
+	--ramp-dateline-weight: 400;
+	--ramp-numeral-weight: 600;
+	--ramp-numeral-stretch: 100%;
+	--ramp-greeting-font: var(--font-family-serif, var(--style-font-serif));
+	--ramp-greeting: 3rem;
+	--ramp-greeting-phone: 2.375rem;
+	--ramp-greeting-weight: 400;
+	--ramp-greeting-stretch: 100%;
+	--ramp-greeting-tracking: -0.01em;
+}
+
+/* Lanes: the sizes of the chart's page at 1440, in Archivo condensed
+   (the composition sets the width axis); smaller values for the 1024 band and the phone are set
+   by the composition. No serif: the serif slot falls back to the body font. */
+[data-style="lanes"] {
+	--style-font-display: "Archivo Variable", var(--font-family);
+	--style-font-serif: var(--font-family);
+	--ramp-clock: 5.75rem;
+	--ramp-countdown: 5.25rem;
+	--ramp-big: 3.5rem;
+	--ramp-hero: 2.25rem;
+	--ramp-date: 1.625rem;
+	--ramp-sentence: 1rem;
+	--ramp-label: 0.71875rem;
+	--ramp-label-tracking: 0.16em;
+	--ramp-page: 1.5rem;
+	--ramp-page-phone: 1.5rem;
+	--ramp-page-tracking: -0.015em;
+	--ramp-record: 1.625rem;
+	--ramp-figure: 1.75rem;
+	--ramp-day: 1.25rem;
+	--ramp-dateline: 1.125rem;
+	--ramp-dateline-style: normal;
+	--ramp-dateline-weight: 700;
+	--ramp-numeral-weight: 700;
+	--ramp-numeral-stretch: 80%;
+	--ramp-greeting-font: var(--font-family-display, var(--style-font-display));
+	--ramp-greeting: 2.5rem;
+	--ramp-greeting-phone: 2rem;
+	--ramp-greeting-weight: 700;
+	--ramp-greeting-stretch: 80%;
+	--ramp-greeting-tracking: -0.01em;
+}
+
+/* Wall: one face (Figtree in every slot) at a large scale; the sizes of
+   the wall at 1440 (a 150 px clock, a 96 px temperature, a 52 px number in the countdown ring,
+   a 44 px hero title). The composition sets smaller values for the 1024 band and the phone. */
+[data-style="wall"] {
+	--style-font-display: var(--font-family);
+	--style-font-serif: var(--font-family);
+	--ramp-clock: 9.375rem;
+	--ramp-countdown: 6rem;
+	--ramp-big: 6rem;
+	--ramp-hero: 2.75rem;
+	--ramp-date: 1.5rem;
+	--ramp-sentence: 1.125rem;
+	--ramp-label: 0.6875rem;
+	--ramp-label-tracking: 0.14em;
+	--ramp-page: 2rem;
+	--ramp-page-phone: 1.75rem;
+	--ramp-page-tracking: -0.02em;
+	--ramp-record: 2.125rem;
+	--ramp-figure: 1.875rem;
+	--ramp-day: 1.25rem;
+	--ramp-dateline: 1.125rem;
+	--ramp-dateline-style: normal;
+	--ramp-dateline-weight: 700;
+	--ramp-numeral-weight: 800;
+	--ramp-numeral-stretch: 100%;
+	--ramp-greeting-font: var(--font-family);
+	--ramp-greeting: 2.5rem;
+	--ramp-greeting-phone: 2rem;
+	--ramp-greeting-weight: 800;
+	--ramp-greeting-stretch: 100%;
+	--ramp-greeting-tracking: -0.025em;
+}

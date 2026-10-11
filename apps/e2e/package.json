@@ -1,0 +1,16 @@
+{
+	"name": "@famos/e2e",
+	"version": "0.1.0",
+	"license": "AGPL-3.0-or-later",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"e2e": "playwright test",
+		"sweep": "playwright test -c sweep.config.ts",
+		"typecheck": "tsc -p ."
+	},
+	"devDependencies": {
+		"@famos/adapters": "workspace:*",
+		"@playwright/test": "1.63.0"
+	}
+}

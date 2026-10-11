@@ -1,0 +1,209 @@
+import { openDatabase, runMigrations } from '@famos/db';
+import { getMigrations } from 'better-auth/db/migration';
+import { beforeEach, describe, expect, it } from 'vitest';
+import {
+	authOptions,
+	createIdentity,
+	type Identity,
+	identityMigrations,
+} from '../src/identity-betterauth/index.ts';
+
+const BASE = 'http://localhost:3000';
+let identity: Identity;
+let db: ReturnType<typeof openDatabase>['db'];
+/** Members whose role no longer signs in with a PIN. */
+const noPin = new Set<string>();
+
+beforeEach(async () => {
+	({ db } = openDatabase({ path: ':memory:' }));
+	await runMigrations(db, [{ scope: 'identity', migrations: identityMigrations }]);
+	// Requests with the header `x-test-device: <id>` count as coming from a family device.
+	identity = createIdentity({
+		db,
+		secret: 's'.repeat(32),
+		baseURL: BASE,
+		secureCookies: false,
+		trustedDevice: async (headers) => headers.get('x-test-device'),
+		mayUsePin: async (memberId) => !noPin.has(memberId),
+	});
+});
+
+const post = (path: string, body: unknown, ip = '10.0.0.1', trusted = true) =>
+	identity.handler(
+		new Request(`${BASE}/api/auth${path}`, {
+			method: 'POST',
+			headers: {
+				'content-type': 'application/json',
+				origin: BASE,
+				'x-famos-client-ip': ip,
+				...(trusted && { 'x-test-device': 'device_1' }),
+			},
+			body: JSON.stringify(body),
+		}),
+	);
+
+const cookieOf = (res: Response) =>
+	res.headers
+		.getSetCookie()
+		.map((c) => c.split(';')[0])
+		.join('; ');
+
+describe('identity-betterauth', () => {
+	it('committed migrations match what better-auth expects', async () => {
+		const plan = await getMigrations(
+			authOptions({
+				db,
+				secret: 's'.repeat(32),
+				baseURL: BASE,
+				trustedDevice: async () => 'device_1',
+				mayUsePin: async () => true,
+			}),
+		);
+		expect(plan.toBeCreated).toEqual([]);
+		expect(plan.toBeAdded).toEqual([]);
+	});
+
+	it('signs in with email + password and resolves the member', async () => {
+		await identity.admin.setPasswordLogin({
+			memberId: 'member_a',
+			email: 'Parent@Example.com',
+			password: 'correct horse battery',
+			displayName: 'P',
+		});
+		const bad = await post('/sign-in/email', {
+			email: 'parent@example.com',
+			password: 'wrong password!!',
+		});
+		expect(bad.status).toBe(401);
+		const res = await post('/sign-in/email', {
+			email: 'parent@example.com',
+			password: 'correct horse battery',
+		});
+		expect(res.status).toBe(200);
+		const who = await identity.resolveMember(new Headers({ cookie: cookieOf(res) }));
+		expect(who?.memberId).toBe('member_a');
+	});
+
+	it('does not allow public sign-up', async () => {
+		const res = await post('/sign-up/email', {
+			email: 'x@example.com',
+			password: 'correct horse battery',
+			name: 'X',
+		});
+		expect(res.status).toBeGreaterThanOrEqual(400);
+	});
+
+	it('signs in with a PIN and rate-limits guessing', async () => {
+		await identity.admin.setPin({ memberId: 'member_kid', pin: '1234', displayName: 'Kid' });
+		expect(
+			(await post('/sign-in/pin', { memberId: 'member_kid', pin: '9999' }, '10.0.0.2')).status,
+		).toBe(401);
+		const ok = await post('/sign-in/pin', { memberId: 'member_kid', pin: '1234' }, '10.0.0.2');
+		expect(ok.status).toBe(200);
+		expect((await identity.resolveMember(new Headers({ cookie: cookieOf(ok) })))?.memberId).toBe(
+			'member_kid',
+		);
+
+		const statuses: number[] = [];
+		for (let i = 0; i < 6; i++)
+			statuses.push(
+				(await post('/sign-in/pin', { memberId: 'member_kid', pin: '0000' }, '10.0.0.3')).status,
+			);
+		expect(statuses).toContain(429);
+	});
+
+	it('refuses a correct PIN once the role no longer signs in with a PIN', async () => {
+		await identity.admin.setPin({ memberId: 'member_kid', pin: '1234', displayName: 'Kid' });
+		noPin.add('member_kid');
+		try {
+			expect(
+				(await post('/sign-in/pin', { memberId: 'member_kid', pin: '1234' }, '10.0.0.7')).status,
+			).toBe(401);
+		} finally {
+			noPin.delete('member_kid');
+		}
+	});
+
+	it('refuses PIN sign-in from devices that are not trusted, even with the right PIN', async () => {
+		await identity.admin.setPin({ memberId: 'member_kid', pin: '1234', displayName: 'Kid' });
+		const res = await post(
+			'/sign-in/pin',
+			{ memberId: 'member_kid', pin: '1234' },
+			'10.0.0.9',
+			false,
+		);
+		expect(res.status).toBe(403);
+	});
+
+	it('changing a PIN invalidates the old one; revokeAll ends sessions', async () => {
+		await identity.admin.setPin({ memberId: 'member_kid', pin: '1234', displayName: 'Kid' });
+		const session = await post('/sign-in/pin', { memberId: 'member_kid', pin: '1234' }, '10.0.0.4');
+		await identity.admin.setPin({ memberId: 'member_kid', pin: '5678', displayName: 'Kid' });
+		expect(
+			(await post('/sign-in/pin', { memberId: 'member_kid', pin: '1234' }, '10.0.0.4')).status,
+		).toBe(401);
+		expect(
+			(await post('/sign-in/pin', { memberId: 'member_kid', pin: '5678' }, '10.0.0.4')).status,
+		).toBe(200);
+
+		await identity.admin.revokeAll('member_kid');
+		expect(await identity.resolveMember(new Headers({ cookie: cookieOf(session) }))).toBeNull();
+	});
+
+	it('ends sessions per member and per device', async () => {
+		await identity.admin.setPin({ memberId: 'member_kid', pin: '1234', displayName: 'Kid' });
+		const pin = await post('/sign-in/pin', { memberId: 'member_kid', pin: '1234' }, '10.0.0.5');
+		const cookie = new Headers({ cookie: cookieOf(pin) });
+		expect(await identity.resolveMember(cookie)).not.toBeNull();
+		await identity.admin.endDeviceSessions('device_other');
+		expect(await identity.resolveMember(cookie)).not.toBeNull();
+		await identity.admin.endDeviceSessions('device_1');
+		expect(await identity.resolveMember(cookie)).toBeNull();
+
+		const again = await post('/sign-in/pin', { memberId: 'member_kid', pin: '1234' }, '10.0.0.5');
+		await identity.admin.endSessions('member_kid');
+		expect(await identity.resolveMember(new Headers({ cookie: cookieOf(again) }))).toBeNull();
+		// The PIN itself still works.
+		expect(
+			(await post('/sign-in/pin', { memberId: 'member_kid', pin: '1234' }, '10.0.0.5')).status,
+		).toBe(200);
+	});
+
+	it('locks an account after five failures, from any address', async () => {
+		await identity.admin.setPin({ memberId: 'member_kid', pin: '1234', displayName: 'Kid' });
+		for (let i = 0; i < 5; i++) {
+			const res = await post(
+				'/sign-in/pin',
+				{ memberId: 'member_kid', pin: '0000' },
+				`10.9.0.${i}`,
+			);
+			expect(res.status).toBe(401);
+		}
+		const locked = await post('/sign-in/pin', { memberId: 'member_kid', pin: '1234' }, '10.9.1.1');
+		expect(locked.status).toBe(429);
+		expect(await locked.json()).toMatchObject({ code: 'LOCKED', retryAfter: 900 });
+		expect(locked.headers.get('retry-after')).toBe('900');
+		// Other accounts are unaffected.
+		await identity.admin.setPin({ memberId: 'member_b', pin: '1234', displayName: 'B' });
+		expect(
+			(await post('/sign-in/pin', { memberId: 'member_b', pin: '1234' }, '10.9.1.2')).status,
+		).toBe(200);
+	});
+
+	it('rejects an email already used by another member', async () => {
+		await identity.admin.setPasswordLogin({
+			memberId: 'member_a',
+			email: 'a@example.com',
+			password: 'correct horse battery',
+			displayName: 'A',
+		});
+		await expect(
+			identity.admin.setPasswordLogin({
+				memberId: 'member_b',
+				email: 'a@example.com',
+				password: 'correct horse battery',
+				displayName: 'B',
+			}),
+		).rejects.toMatchObject({ code: 'conflict' });
+	});
+});

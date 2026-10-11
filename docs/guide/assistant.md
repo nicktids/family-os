@@ -1,0 +1,57 @@
+# The assistant
+
+The assistant answers questions in plain language and turns requests into suggestions that a person approves. Open it from **Ask the assistant** on the Today screen, from **Assistant** in the side bar (on phones it may sit under **More**), or at `/assistant`.
+
+People with the permission **Ask the assistant** can use it. Admins, members and supervised members have it by default; guests do not. You can change this per role in **Settings → Family → Roles**.
+
+## What it can do
+
+- **Look things up** in the parts of FamilyOS you may see: the calendar, tasks, shopping lists and more.
+- **Find things by meaning** when Search is set up: "which paper is about the boiler warranty?" (see [Search](search.md)).
+- **Suggest changes**: "add milk and bread to the shopping list" creates a suggestion under the answer. Nothing changes until someone approves it.
+
+Examples to try:
+
+- What's on the calendar this week?
+- Add milk and bread to the shopping list.
+- Which tasks are still open?
+- What is on the shopping list?
+
+## What it sees
+
+The assistant sees only what the person asking may see, and only in the areas the family allows for AI (**Settings → AI → What the AI may read**). Areas that are off are never offered to it. An area set to **Local only** is available only when the model runs on your own network.
+
+It is told people's names and descriptions only when **Send names and descriptions** is on in Settings → AI. Otherwise it cannot refer to anyone by name.
+
+Conversations are private: each person sees only their own.
+
+## Suggestions
+
+Suggestions appear as the same cards as in Quick add, right under the answer. People who may approve can approve, edit or reject them there. Others, such as a supervised member, see **Waiting for approval**; an adult decides in Quick add. An approved suggestion can be taken back with **Undo**.
+
+## What it remembers
+
+Tell the assistant to remember something ("remember that I'm vegetarian") and it suggests a short note, as a card with **Remember this**. Only you can see and approve that card; nobody else, not even an admin, can decide it.
+
+Notes are kept on **Settings → You → Assistant memory**. Open it from the link on the Assistant page. There you can add a note, **Edit** it, or **Forget** it (tap twice). A note is at most 280 characters, and you can keep up to 100.
+
+The assistant reads your notes only in your own conversations, and only when **Send names and descriptions** is on in Settings → AI. Notes are not shared with other people, and not with an agent you connect yourself.
+
+## Using the page
+
+- Conversations are listed under **Conversations** on phones and in a column on wide screens. Use **New conversation** to start one. The pencil renames a conversation. **Delete this conversation** appears under the open one; tap twice.
+- On a computer, Enter sends (Shift+Enter makes a new line). On a touch screen, use the send button.
+- While an answer is being written you can **Stop waiting**. This only hides the indicator; the answer still arrives.
+- If something goes wrong, the answer says why (turned off, no model, limit reached, key refused, local model needed, too slow, no answer, not allowed), and **Ask again** sends your last question again.
+
+Answers are plain text. Paths inside the app, such as `/calendar`, become links; web addresses stay text and are never opened for you.
+
+## If you have your own agent
+
+Members who already use a personal AI agent can connect it to FamilyOS instead. It sees the same things and its changes are suggestions in the same way. See [Bring your own agent](mcp.md).
+
+## Turning it off
+
+An admin can turn the assistant off with the **Assistant chat** switch in Settings → AI. It then answers "The assistant is turned off." and nothing is sent to a model.
+
+To hide it completely, turn **Assistant** off in **Settings → Family → Features**.

@@ -1,0 +1,119 @@
+import { getContext, setContext } from 'svelte';
+import type { AnyDraftPresenter, PresenterMember, SlotContribution, SlotName } from './slots.js';
+
+/**
+ * What the app gives extension UIs (pages, widgets, draft editors). Extensions cannot import
+ * the app's modules; the app provides this through Svelte context instead.
+ */
+export interface AppContext {
+	/** Translate a namespaced key, e.g. `calendar:nav`. Reactive to locale changes. */
+	t(key: string, options?: Record<string, unknown>): string;
+	/** The UI language (`en`, `tr`): for words only. Never pass it to `Intl` for dates or numbers. */
+	locale(): string;
+	/** BCP 47 tag for dates, times, numbers and money, separate from the language. */
+	formatLocale(): string;
+	/** First day of the week, ISO: 1 = Monday … 7 = Sunday. */
+	weekStart(): number;
+	hourCycle(): 'h12' | 'h23';
+	temperatureUnit(): 'celsius' | 'fahrenheit';
+	/** Active family members (refreshed on changes). */
+	members(): readonly PresenterMember[];
+	/**
+	 * The signed-in member, if any. `nextUp`: whose next thing Today's hero shows, the family's
+	 * (the default) or theirs (`core.setMyNextUp`).
+	 */
+	me(): (PresenterMember & { roleId: string; nextUp: 'family' | 'me' }) | null;
+	/** Whether the signed-in member's role grants a capability, e.g. `core.drafts.approve`. */
+	can(capability: string): boolean;
+	/** Family time zone (IANA). */
+	timeZone(): string;
+	/** Subscribe to realtime events by name prefix, e.g. `calendar.`; returns unsubscribe. */
+	onEvent(prefix: string, handler: (name: string, payload: unknown) => void): () => void;
+	/** How drafts of an action are shown (from whichever extension owns the action). */
+	draftPresenter(actionId: string): AnyDraftPresenter | undefined;
+	/**
+	 * Contributions to a slot from extensions that are turned on and whose `requires` the viewer
+	 * holds, for pages that render a slot of another extension (the record page of a domain).
+	 */
+	slots<S extends SlotName>(name: S): readonly SlotContribution<S>[];
+	/** Whether a path such as `/calendar` is a page of the app (for linking paths in text). */
+	isAppPath(path: string): boolean;
+	/** Show a notice with an optional action (e.g. Undo). */
+	toast(message: string, action?: { label: string; run: () => void }): void;
+	/**
+	 * Runs an action through the API with an idempotency key. With `offline: true`
+	 * (only for actions declared `offline`), a call that cannot reach the server is kept in the
+	 * browser and sent later; it resolves with `{ queued: true }` so the page can show the
+	 * change as "waiting to send". Server errors (4xx/5xx) are thrown as before.
+	 */
+	runAction<O = unknown>(
+		actionId: string,
+		input: unknown,
+		options?: RunActionOptions,
+	): Promise<RunActionResult<O>>;
+	/** Changes of the signed-in member waiting to be sent, oldest first (reactive). */
+	waiting(): readonly WaitingChange[];
+	/**
+	 * Whether the app is showing what was last seen (no connection). Reactive: read it in the
+	 * effect that loads a page's data, so the page loads again when the connection is back.
+	 */
+	offline(): boolean;
+	/** The query string of the current page (reactive): the place for a page's selection. */
+	query(): URLSearchParams;
+	/**
+	 * Changes the query string of the current page without a reload. `null` removes a key.
+	 * A new entry in the history by default, so Back returns to the previous selection;
+	 * `replace: true` for changes that are not a navigation.
+	 */
+	setQuery(changes: Record<string, string | null>, options?: { replace?: boolean }): void;
+}
+
+export interface RunActionOptions {
+	/** Keep the call for later when there is no connection. */
+	offline?: boolean;
+	/** What was done, in the person's language, for the "could not be saved" list. */
+	label?: string;
+}
+
+export type RunActionResult<O = unknown> =
+	| { queued: true }
+	| { queued: false; status: 'applied'; output: O }
+	| { queued: false; status: 'drafted'; draftId: string };
+
+/** A queued call, as pages need it to mark items "waiting to send". */
+export interface WaitingChange {
+	actionId: string;
+	input: unknown;
+}
+
+const KEY = Symbol('famos.app');
+
+export function provideAppContext(context: AppContext): void {
+	setContext(KEY, context);
+}
+
+export function useApp(): AppContext {
+	const context = getContext<AppContext | undefined>(KEY);
+	if (!context) throw new Error('useApp() called outside the FamilyOS app');
+	return context;
+}
+
+type PluralSuffix = 'zero' | 'one' | 'two' | 'few' | 'many' | 'other';
+type Keys<Catalog> = Extract<keyof Catalog, string>;
+/** Catalog keys; plural forms (`items_one`, `items_other`) are also usable by their base key. */
+export type CatalogKey<Catalog> =
+	| Keys<Catalog>
+	| (Keys<Catalog> extends infer K
+			? K extends `${infer Base}_${PluralSuffix}`
+				? Base
+				: never
+			: never);
+
+/** A translator bound to one namespace with keys typed by that namespace's catalog. */
+export function namespaced<Catalog extends Record<string, unknown>>(
+	app: AppContext,
+	namespace: string,
+) {
+	return (key: CatalogKey<Catalog>, options?: Record<string, unknown>) =>
+		app.t(`${namespace}:${key}`, options);
+}

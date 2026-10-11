@@ -1,0 +1,1220 @@
+import {
+	type Actor,
+	AI_AREA_ACCESS,
+	BUILT_IN_ROLES,
+	type DbExecutor,
+	defineAction,
+	defineExtension,
+	defineJob,
+	defineNotificationKind,
+	defineRoute,
+	FamosError,
+	type IdentityAdmin,
+	idSchema,
+	type UnitOfWork,
+} from '@famos/sdk';
+import { formatLocaleForLanguage } from '@famos/time';
+import { z } from 'zod';
+import type { Access } from './access.ts';
+import type { ActionRunner } from './action-runner.ts';
+import { type AiAreas, readAiAreas, writeAiAreas } from './ai-areas.ts';
+import { createAutoApproval } from './auto-approval.ts';
+import { CORE_CAPABILITIES } from './core-capabilities.ts';
+import {
+	aiAreasChanged,
+	coreEvents,
+	featuresChanged,
+	memberChanged,
+	roleChanged,
+} from './core-events.ts';
+import type { DeviceService } from './devices.ts';
+import { EXPIRE_JOB, scheduleExpiry, WAITING_STATUSES } from './draft-expiry.ts';
+import {
+	FamilySettingsSchema,
+	LanguageCodeSchema,
+	readFamilySettings,
+	regionFormats,
+	writeFamilySettings,
+} from './family.ts';
+import { type Features, readDisabled, writeDisabled } from './features.ts';
+import { pruneIdempotency, schedulePrune } from './idempotency.ts';
+import { createLanguages, familySettingsChanged, type LanguagePort } from './languages.ts';
+import { createMemory } from './memory.ts';
+import { coreMigrations } from './migrations/0001_init.ts';
+import { NextUpModeSchema, readNextUp, setMyNextUp } from './next-up.ts';
+import type { createNotifications } from './notifications.ts';
+import type { Registry } from './registry.ts';
+import type { Search } from './search.ts';
+import type { CoreTables, DeviceRow, DraftRow, MemberRow } from './tables.ts';
+import type { Themes } from './themes.ts';
+
+/**
+ * Member colors. Eight hues kept away from coral/red so a member's
+ * color never reads as "attention". Assigned in order; admins can change them.
+ */
+export const MEMBER_COLORS = [
+	'#3d7aae',
+	'#c38f22',
+	'#975cbd',
+	'#2f9a94',
+	'#c66591',
+	'#68778b',
+	'#996c46',
+	'#5c923d',
+];
+
+const MemberIdSchema = idSchema('member');
+const ColorSchema = z.string().regex(/^#[0-9a-f]{6}$/i);
+const LocaleSchema = LanguageCodeSchema;
+const RoleIdSchema = z.string().min(1).max(60);
+const AboutSchema = z.string().trim().max(300);
+
+export const MemberSchema = z.object({
+	id: z.string(),
+	displayName: z.string(),
+	roleId: z.string(),
+	/** Free text about the person, for context; no security meaning. */
+	about: z.string().nullable(),
+	color: z.string(),
+	locale: LocaleSchema.nullable(),
+	createdAt: z.number(),
+	archived: z.boolean(),
+});
+export type Member = z.infer<typeof MemberSchema>;
+
+export const RoleViewSchema = z.object({
+	id: z.string(),
+	/** Null for built-in roles: the UI shows their translated name. */
+	name: z.string().nullable(),
+	builtIn: z.boolean(),
+	base: z.enum(['admin', 'member', 'supervised', 'guest']),
+	overrides: z.record(z.string(), z.boolean()),
+	/** Effective capability ids. */
+	capabilities: z.array(z.string()),
+	/** Active members with this role. */
+	members: z.number().int(),
+});
+
+export const CapabilityViewSchema = z.object({
+	id: z.string(),
+	/** i18n key, e.g. `calendar:cap_edit`. */
+	label: z.string(),
+	level: z.enum(['view', 'use', 'edit', 'manage']),
+	critical: z.boolean(),
+	/** The extension (or `core`) that declared it. */
+	owner: z.string(),
+});
+
+const DRAFT_STATUSES = [
+	'pending',
+	'approved',
+	'rejected',
+	'applied',
+	'failed',
+	'undone',
+	'expired',
+] as const;
+
+export const DraftSchema = z.object({
+	id: z.string(),
+	actionId: z.string(),
+	input: z.unknown(),
+	editedInput: z.unknown().nullable(),
+	/** `expired`: nobody decided it and the day it was about has passed (it never runs). */
+	status: z.enum(DRAFT_STATUSES),
+	proposedBy: z.unknown(),
+	sourceKind: z.string().nullable(),
+	sourceId: z.string().nullable(),
+	summary: z.string().nullable(),
+	confidence: z.number().nullable(),
+	uncertainFields: z.array(z.string()),
+	error: z.string().nullable(),
+	/** Addressed to this member alone (a memory, a question): only they decide it. */
+	forMember: z.string().nullable(),
+	createdAt: z.number(),
+	decidedAt: z.number().nullable(),
+	/** Approved by a person's auto-approval setting; `decidedBy` is who turned it on. */
+	autoApproved: z.boolean(),
+	decidedBy: z.string().nullable(),
+	/** Applied and its action can take it back (Undo). */
+	undoable: z.boolean(),
+	/** Pending only: what it proposes seems to exist already ("this may already be there"). */
+	mayExist: z.boolean(),
+});
+
+const toMember = (row: MemberRow): Member => ({
+	id: row.id,
+	displayName: row.display_name,
+	roleId: row.role_id,
+	about: row.about,
+	color: row.color,
+	locale: row.locale,
+	createdAt: row.created_at,
+	archived: row.archived_at !== null,
+});
+
+const toDraft = (
+	row: DraftRow,
+	undoable = false,
+	mayExist = false,
+): z.infer<typeof DraftSchema> => ({
+	id: row.id,
+	actionId: row.action_id,
+	input: JSON.parse(row.input),
+	editedInput: row.edited_input === null ? null : JSON.parse(row.edited_input),
+	status: row.status,
+	proposedBy: JSON.parse(row.proposed_by),
+	sourceKind: row.source_kind,
+	sourceId: row.source_id,
+	summary: row.summary,
+	confidence: row.confidence,
+	uncertainFields: row.uncertain_fields ? (JSON.parse(row.uncertain_fields) as string[]) : [],
+	// The stored message can carry internals (SQL, paths); members see only that it failed.
+	error: row.error === null ? null : 'Applying this change failed. Try again or ask an admin.',
+	forMember: row.for_member,
+	createdAt: row.created_at,
+	decidedAt: row.decided_at,
+	autoApproved: row.auto_approved === 1,
+	decidedBy: row.decided_by,
+	undoable,
+	mayExist,
+});
+
+const members = (db: DbExecutor) => db.withTables<CoreTables>();
+
+async function findMember(db: DbExecutor, id: string): Promise<MemberRow> {
+	const row = await members(db)
+		.selectFrom('core_members')
+		.selectAll()
+		.where('id', '=', id)
+		.executeTakeFirst();
+	if (!row) throw new FamosError('not_found', 'Member not found');
+	return row;
+}
+
+async function activeAdminCount(db: DbExecutor): Promise<number> {
+	const row = await members(db)
+		.selectFrom('core_members')
+		.select((eb) => eb.fn.countAll<number>().as('n'))
+		.where('role_id', '=', 'admin')
+		.where('archived_at', 'is', null)
+		.executeTakeFirstOrThrow();
+	return Number(row.n);
+}
+
+async function insertMember(
+	uow: Pick<UnitOfWork, 'db' | 'ids' | 'clock'>,
+	input: {
+		displayName: string;
+		roleId: string;
+		about?: string | undefined;
+		color?: string | undefined;
+		locale?: Member['locale'] | undefined;
+	},
+): Promise<MemberRow> {
+	const count = await members(uow.db)
+		.selectFrom('core_members')
+		.select((eb) => eb.fn.countAll<number>().as('n'))
+		.executeTakeFirstOrThrow();
+	const now = uow.clock.now();
+	const row: MemberRow = {
+		id: uow.ids.next('member'),
+		display_name: input.displayName,
+		role_id: input.roleId,
+		about: input.about?.trim() || null,
+		color: input.color ?? MEMBER_COLORS[Number(count.n) % MEMBER_COLORS.length] ?? '#4b5563',
+		locale: input.locale ?? null,
+		created_at: now,
+		updated_at: now,
+		archived_at: null,
+	};
+	await members(uow.db).insertInto('core_members').values(row).execute();
+	return row;
+}
+
+const requireMember = (actor: Actor) => {
+	if (actor.kind !== 'member') throw new FamosError('forbidden', 'Only members can do this');
+	return actor;
+};
+
+/** Admins are told when an off-site backup could not be uploaded. */
+export const backupFailed = defineNotificationKind({
+	id: 'core.backupFailed',
+	label: 'app:notify_kind_backup_failed',
+	audience: 'core.settings.manage',
+});
+
+/** Approvers are told when a suggestion waits for them (sent by the action runner). */
+export const draftWaiting = defineNotificationKind({
+	id: 'core.draftWaiting',
+	label: 'app:notify_kind_draft_waiting',
+	audience: 'core.drafts.approve',
+});
+
+export const DeviceSchema = z.object({
+	id: z.string(),
+	name: z.string(),
+	kind: z.enum(['family', 'kiosk']),
+	createdAt: z.number(),
+	lastSeenAt: z.number(),
+	/** Displays only: what the display may show. */
+	display: z.object({ capabilities: z.array(z.string()), showNames: z.boolean() }).nullable(),
+});
+
+export const toDevice = (row: DeviceRow): z.infer<typeof DeviceSchema> => ({
+	id: row.id,
+	name: row.name,
+	kind: row.kind,
+	createdAt: row.created_at,
+	lastSeenAt: row.last_seen_at,
+	display:
+		row.kind === 'kiosk' && row.display_capabilities !== null
+			? {
+					capabilities: JSON.parse(row.display_capabilities) as string[],
+					showNames: row.display_show_names === 1,
+				}
+			: null,
+});
+
+export interface CoreExtensionDeps {
+	/** Family search: its jobs, the `core.searchFamily` action and routes. */
+	search: Pick<Search, 'jobs' | 'actions' | 'routes'>;
+	identity: IdentityAdmin;
+	runner: () => ActionRunner;
+	devices: () => DeviceService;
+	appVersion: string;
+	access: () => Access;
+	features: () => Features;
+	/** Ids of every registered extension (core first). */
+	extensionIds: () => readonly string[];
+	/** Every registered extension with whether it is marked sensitive (AI areas). */
+	extensions: () => readonly {
+		id: string;
+		sensitive: boolean;
+		usesAi: boolean;
+	}[];
+	aiAreas: () => AiAreas;
+	/** The registry, for auto-approval (which actions opted in); available once the kernel has built it. */
+	registry: () => Registry;
+	/** Notification jobs, actions and routes. */
+	notifications: ReturnType<typeof createNotifications>;
+	/** The one-time code first-run setup requires, or undefined when none is required (tests). */
+	setupCode?: string;
+	/** The language packs available; the composition root builds the registry. */
+	languages: () => LanguagePort;
+	/** Theme packs and who chose which theme; the kernel builds it from the composition root's registry. */
+	themes: Themes;
+	/** How long a suggestion waits before it notifies approvers. */
+	draftNotifyDelayMs: number;
+}
+
+/** Compares without an early exit, so timing does not reveal how much of a code matched. */
+function sameCode(a: string, b: string): boolean {
+	let diff = a.length ^ b.length;
+	for (let i = 0; i < Math.max(a.length, b.length); i++)
+		diff |= (a.charCodeAt(i) || 0) ^ (b.charCodeAt(i) || 0);
+	return diff === 0;
+}
+
+export function createCoreExtension(deps: CoreExtensionDeps) {
+	const autoApproval = createAutoApproval({
+		runner: deps.runner,
+		access: deps.access,
+		registry: deps.registry,
+		draftNotifyDelayMs: deps.draftNotifyDelayMs,
+	});
+	/** A role id is a built-in role or an existing custom role. */
+	const assertRole = (roleId: string) => {
+		const access = deps.access();
+		if (!access.isBuiltIn(roleId) && !access.customRoles().some((r) => r.id === roleId)) {
+			throw new FamosError('bad_request', `Unknown role "${roleId}"`);
+		}
+	};
+
+	/** Overrides may only name registered, non-critical capabilities. */
+	const checkOverrides = (overrides: Record<string, boolean>) => {
+		const access = deps.access();
+		for (const id of Object.keys(overrides)) {
+			const capability = access.capability(id);
+			if (!capability) throw new FamosError('bad_request', `Unknown capability "${id}"`);
+			if (capability.critical)
+				throw new FamosError('bad_request', `"${id}" belongs to the Admin role only`);
+		}
+	};
+
+	const languages = createLanguages({ languages: deps.languages });
+	const memory = createMemory();
+
+	const createMember = defineAction({
+		id: 'core.createMember',
+		title: 'Add a family member',
+		input: z.object({
+			displayName: z.string().trim().min(1).max(60),
+			roleId: RoleIdSchema,
+			about: AboutSchema.optional(),
+			color: ColorSchema.optional(),
+			locale: LocaleSchema.optional(),
+		}),
+		output: MemberSchema,
+		requires: CORE_CAPABILITIES.membersManage.id,
+		approval: 'never',
+		async run(uow, input) {
+			assertRole(input.roleId);
+			if (input.locale) languages.assertKnown(input.locale);
+			const row = await insertMember(uow, input);
+			uow.emit(memberChanged, { memberId: row.id });
+			return toMember(row);
+		},
+	});
+
+	const updateMember = defineAction({
+		id: 'core.updateMember',
+		title: 'Update a family member',
+		input: z.object({
+			memberId: MemberIdSchema,
+			displayName: z.string().trim().min(1).max(60).optional(),
+			roleId: RoleIdSchema.optional(),
+			about: AboutSchema.nullable().optional(),
+			color: ColorSchema.optional(),
+			locale: LocaleSchema.nullable().optional(),
+		}),
+		output: MemberSchema,
+		requires: CORE_CAPABILITIES.membersManage.id,
+		approval: 'never',
+		async run(uow, input) {
+			if (input.roleId !== undefined) assertRole(input.roleId);
+			if (input.locale) languages.assertKnown(input.locale);
+			const current = await findMember(uow.db, input.memberId);
+			if (
+				current.role_id === 'admin' &&
+				input.roleId !== undefined &&
+				input.roleId !== 'admin' &&
+				(await activeAdminCount(uow.db)) <= 1
+			) {
+				throw new FamosError('conflict', 'The last admin cannot be demoted', {
+					reason: 'last_admin',
+				});
+			}
+			await members(uow.db)
+				.updateTable('core_members')
+				.set({
+					...(input.displayName !== undefined && { display_name: input.displayName }),
+					...(input.roleId !== undefined && { role_id: input.roleId }),
+					...(input.about !== undefined && { about: input.about?.trim() || null }),
+					...(input.color !== undefined && { color: input.color }),
+					...(input.locale !== undefined && { locale: input.locale }),
+					updated_at: uow.clock.now(),
+				})
+				.where('id', '=', input.memberId)
+				.execute();
+			uow.emit(memberChanged, { memberId: input.memberId });
+			return toMember(await findMember(uow.db, input.memberId));
+		},
+	});
+
+	const setMyLanguage = defineAction({
+		id: 'core.setMyLanguage',
+		title: 'Choose my own language',
+		input: z.object({ locale: LocaleSchema.nullable() }),
+		output: MemberSchema,
+		// Everyone may choose how the app speaks to them; it changes nothing for anyone else.
+		requires: CORE_CAPABILITIES.notificationsReceive.id,
+		approval: 'never',
+		async run(uow, input) {
+			const actor = requireMember(uow.actor);
+			if (input.locale) languages.assertKnown(input.locale);
+			await members(uow.db)
+				.updateTable('core_members')
+				.set({ locale: input.locale, updated_at: uow.clock.now() })
+				.where('id', '=', actor.memberId)
+				.execute();
+			uow.emit(memberChanged, { memberId: actor.memberId });
+			return toMember(await findMember(uow.db, actor.memberId));
+		},
+	});
+
+	const archiveMember = defineAction({
+		id: 'core.archiveMember',
+		title: 'Remove a family member from the family',
+		input: z.object({ memberId: MemberIdSchema }),
+		output: MemberSchema,
+		requires: CORE_CAPABILITIES.membersManage.id,
+		approval: 'never',
+		async run(uow, input) {
+			const current = await findMember(uow.db, input.memberId);
+			if (
+				current.role_id === 'admin' &&
+				current.archived_at === null &&
+				(await activeAdminCount(uow.db)) <= 1
+			) {
+				throw new FamosError('conflict', 'The last admin cannot be archived', {
+					reason: 'last_admin',
+				});
+			}
+			const now = uow.clock.now();
+			await members(uow.db)
+				.updateTable('core_members')
+				.set({ archived_at: now, updated_at: now })
+				.where('id', '=', input.memberId)
+				.execute();
+			uow.emit(memberChanged, { memberId: input.memberId, endSessions: true });
+			return toMember(await findMember(uow.db, input.memberId));
+		},
+	});
+
+	const setFeatureEnabled = defineAction({
+		id: 'core.setFeatureEnabled',
+		title: 'Turn an extension on or off',
+		input: z.object({ extensionId: z.string(), enabled: z.boolean() }),
+		output: z.object({ extensionId: z.string(), enabled: z.boolean() }),
+		requires: CORE_CAPABILITIES.featuresManage.id,
+		approval: 'never',
+		async run(uow, input) {
+			if (!deps.extensionIds().includes(input.extensionId))
+				throw new FamosError('bad_request', `Unknown extension "${input.extensionId}"`);
+			if (input.extensionId === 'core')
+				throw new FamosError('bad_request', 'Core cannot be turned off');
+			const disabled = new Set(await readDisabled(uow.db));
+			if (input.enabled) disabled.delete(input.extensionId);
+			else disabled.add(input.extensionId);
+			await writeDisabled(uow.db, [...disabled], uow.clock.now());
+			// Data stays; the cache is refreshed after commit (kernel listener).
+			uow.emit(featuresChanged, input);
+			return input;
+		},
+	});
+
+	const setAiAreaAccess = defineAction({
+		id: 'core.setAiAreaAccess',
+		title: 'Choose how far the AI may use an area',
+		input: z.object({
+			extensionId: z.string(),
+			access: z.enum(AI_AREA_ACCESS),
+			/** Required to open a sensitive area to any provider: the data leaves the house. */
+			confirmSensitive: z.boolean().optional(),
+		}),
+		output: z.object({ extensionId: z.string(), access: z.enum(AI_AREA_ACCESS) }),
+		requires: CORE_CAPABILITIES.aiManage.id,
+		approval: 'never',
+		async run(uow, input) {
+			const area = deps.extensions().find((e) => e.id === input.extensionId);
+			if (!area || input.extensionId === 'core')
+				throw new FamosError('bad_request', `"${input.extensionId}" is not an area for the AI`);
+			if (area.sensitive && input.access === 'any' && input.confirmSensitive !== true) {
+				throw new FamosError(
+					'bad_request',
+					`"${input.extensionId}" is a sensitive area: opening it to any provider sends its data to that provider, so it needs confirmSensitive: true`,
+				);
+			}
+			const areas = await readAiAreas(uow.db);
+			areas[input.extensionId] = input.access;
+			await writeAiAreas(uow.db, areas, uow.clock.now());
+			// The cache is refreshed after commit (kernel listener).
+			uow.emit(aiAreasChanged, { extensionId: input.extensionId, access: input.access });
+			return { extensionId: input.extensionId, access: input.access };
+		},
+	});
+
+	const updateFamilySettings = defineAction({
+		id: 'core.updateFamilySettings',
+		title: 'Change family settings (time zone, language, region formats)',
+		input: FamilySettingsSchema.partial(),
+		output: FamilySettingsSchema,
+		requires: CORE_CAPABILITIES.settingsManage.id,
+		approval: 'never',
+		async run(uow, input) {
+			if (input.locale) languages.assertKnown(input.locale);
+			const next = { ...(await readFamilySettings(uow.db)), ...input };
+			await writeFamilySettings(uow.db, next, uow.clock.now());
+			// Other open screens (language, region formats, time zone) refresh without a reload.
+			uow.emit(familySettingsChanged, {});
+			return next;
+		},
+	});
+
+	const RoleInputSchema = z.object({
+		name: z.string().trim().min(1).max(40),
+		base: z.enum(['member', 'supervised', 'guest']),
+		overrides: z.record(z.string(), z.boolean()).default({}),
+	});
+
+	const createRole = defineAction({
+		id: 'core.createRole',
+		title: 'Create a role from a built-in one',
+		input: RoleInputSchema,
+		output: z.object({ id: z.string() }),
+		requires: CORE_CAPABILITIES.rolesManage.id,
+		approval: 'never',
+		async run(uow, input) {
+			checkOverrides(input.overrides);
+			const now = uow.clock.now();
+			const id = uow.ids.next('role');
+			await members(uow.db)
+				.insertInto('core_roles')
+				.values({
+					id,
+					name: input.name,
+					base: input.base,
+					overrides: JSON.stringify(input.overrides),
+					created_at: now,
+					updated_at: now,
+				})
+				.execute();
+			uow.emit(roleChanged, { roleId: id });
+			return { id };
+		},
+	});
+
+	const updateRole = defineAction({
+		id: 'core.updateRole',
+		title: 'Rename a custom role or change its capabilities',
+		input: z.object({
+			id: idSchema('role'),
+			name: RoleInputSchema.shape.name.optional(),
+			overrides: z.record(z.string(), z.boolean()).optional(),
+		}),
+		output: z.object({ ok: z.literal(true) }),
+		requires: CORE_CAPABILITIES.rolesManage.id,
+		approval: 'never',
+		async run(uow, input) {
+			const row = await members(uow.db)
+				.selectFrom('core_roles')
+				.select('id')
+				.where('id', '=', input.id)
+				.executeTakeFirst();
+			if (!row) throw new FamosError('not_found', 'Role not found');
+			if (input.overrides) checkOverrides(input.overrides);
+			await members(uow.db)
+				.updateTable('core_roles')
+				.set({
+					...(input.name !== undefined && { name: input.name }),
+					...(input.overrides !== undefined && { overrides: JSON.stringify(input.overrides) }),
+					updated_at: uow.clock.now(),
+				})
+				.where('id', '=', input.id)
+				.execute();
+			uow.emit(roleChanged, { roleId: input.id });
+			return { ok: true as const };
+		},
+	});
+
+	const deleteRole = defineAction({
+		id: 'core.deleteRole',
+		title: 'Delete a custom role nobody has',
+		input: z.object({ id: idSchema('role') }),
+		output: z.object({ ok: z.literal(true) }),
+		requires: CORE_CAPABILITIES.rolesManage.id,
+		approval: 'never',
+		async run(uow, { id }) {
+			const used = await members(uow.db)
+				.selectFrom('core_members')
+				.select('id')
+				.where('role_id', '=', id)
+				.executeTakeFirst();
+			if (used)
+				throw new FamosError('conflict', 'Members still have this role (archived members too)');
+			await members(uow.db).deleteFrom('core_roles').where('id', '=', id).execute();
+			uow.emit(roleChanged, { roleId: id });
+			return { ok: true as const };
+		},
+	});
+
+	const listRoles = defineRoute({
+		method: 'get',
+		path: '/roles',
+		operationId: 'core.listRoles',
+		summary: 'Capabilities and roles, with what each role can do',
+		requires: CORE_CAPABILITIES.membersView.id,
+		response: z.object({
+			capabilities: z.array(CapabilityViewSchema),
+			roles: z.array(RoleViewSchema),
+		}),
+		async handle(ctx, { actor }) {
+			// A display may see who lives here (with "show names"), not how roles are set up.
+			if (actor.kind === 'display') throw new FamosError('forbidden', 'Not allowed');
+			const access = deps.access();
+			const counts = await members(ctx.db)
+				.selectFrom('core_members')
+				.select(['role_id', (eb) => eb.fn.countAll<number>().as('n')])
+				.where('archived_at', 'is', null)
+				.groupBy('role_id')
+				.execute();
+			const count = (id: string) => Number(counts.find((c) => c.role_id === id)?.n ?? 0);
+			const builtIn = BUILT_IN_ROLES.map((id) => ({
+				id,
+				name: null,
+				builtIn: true,
+				base: id,
+				overrides: {},
+				capabilities: [...access.effective(id)],
+				members: count(id),
+			}));
+			const custom = access.customRoles().map((r) => ({
+				id: r.id,
+				name: r.name,
+				builtIn: false,
+				base: r.base,
+				overrides: r.overrides,
+				capabilities: [...access.effective(r.id)],
+				members: count(r.id),
+			}));
+			return {
+				capabilities: access.capabilities.map((c) => ({
+					id: c.id,
+					label: c.label,
+					level: c.level,
+					critical: c.critical === true,
+					owner: c.id.split('.')[0] as string,
+				})),
+				roles: [...builtIn, ...custom],
+			};
+		},
+	});
+
+	const setupStatus = defineRoute({
+		method: 'get',
+		path: '/setup',
+		operationId: 'core.getSetupStatus',
+		summary: 'Whether first-run setup is still required',
+		requires: 'public',
+		response: z.object({
+			needsSetup: z.boolean(),
+			/** Setup asks for the one-time code printed in the server log. */
+			needsCode: z.boolean(),
+			appVersion: z.string(),
+		}),
+		async handle(ctx) {
+			const any = await members(ctx.db)
+				.selectFrom('core_members')
+				.select('id')
+				.limit(1)
+				.executeTakeFirst();
+			return {
+				needsSetup: any === undefined,
+				needsCode: deps.setupCode !== undefined,
+				appVersion: deps.appVersion,
+			};
+		},
+	});
+
+	const setup = defineRoute({
+		method: 'post',
+		path: '/setup',
+		operationId: 'core.completeSetup',
+		summary: 'Create the first admin (only while no members exist)',
+		requires: 'public',
+		status: 201,
+		body: z.object({
+			displayName: z.string().trim().min(1).max(60),
+			email: z.email(),
+			password: z.string().min(10).max(200),
+			locale: LocaleSchema,
+			timeZone: FamilySettingsSchema.shape.timeZone.optional(),
+			/** Region formats, as the browser suggests them; anything left out is derived from the format locale. */
+			...FamilySettingsSchema.pick({
+				formatLocale: true,
+				weekStart: true,
+				hourCycle: true,
+				temperatureUnit: true,
+			}).partial().shape,
+			/** The code from the server log or `data/setup-code`, so a fresh instance cannot be claimed. */
+			setupCode: z.string().max(100).optional(),
+		}),
+		response: MemberSchema,
+		async handle(ctx, { body }) {
+			if (deps.setupCode !== undefined && !sameCode(body.setupCode?.trim() ?? '', deps.setupCode))
+				throw new FamosError('forbidden', 'The setup code is not correct');
+			languages.assertKnown(body.locale);
+			const row = await ctx.db.transaction().execute(async (trx) => {
+				const any = await members(trx)
+					.selectFrom('core_members')
+					.select('id')
+					.limit(1)
+					.executeTakeFirst();
+				if (any) throw new FamosError('conflict', 'Setup has already been completed');
+				const settings = {
+					timeZone: body.timeZone ?? 'UTC',
+					locale: body.locale,
+					...regionFormats(body.formatLocale ?? formatLocaleForLanguage(body.locale)),
+					...(body.weekStart !== undefined && { weekStart: body.weekStart }),
+					...(body.hourCycle && { hourCycle: body.hourCycle }),
+					...(body.temperatureUnit && { temperatureUnit: body.temperatureUnit }),
+				};
+				await writeFamilySettings(trx, settings, ctx.clock.now());
+				return insertMember(
+					{ db: trx, ids: ctx.ids, clock: ctx.clock },
+					{ displayName: body.displayName, locale: body.locale, roleId: 'admin' },
+				);
+			});
+			// Identity writes share the connection, so they run after the transaction (see IdentityAdmin).
+			try {
+				await deps.identity.setPasswordLogin({
+					memberId: row.id,
+					email: body.email,
+					password: body.password,
+					displayName: body.displayName,
+				});
+			} catch (error) {
+				await members(ctx.db).deleteFrom('core_members').where('id', '=', row.id).execute();
+				throw error;
+			}
+			return toMember(row);
+		},
+	});
+
+	const me = defineRoute({
+		method: 'get',
+		path: '/me',
+		operationId: 'core.getMe',
+		summary: 'The signed-in member, with what their role allows',
+		requires: 'signedIn',
+		response: MemberSchema.extend({
+			capabilities: z.array(z.string()),
+			/** Extensions turned off in Settings → Features; their UI is hidden. */
+			disabledExtensions: z.array(z.string()),
+			/** Whose next thing the hero on Today shows (`core.setMyNextUp`). */
+			nextUp: NextUpModeSchema,
+		}),
+		async handle(ctx, { actor }) {
+			const row = await findMember(ctx.db, requireMember(actor).memberId);
+			return {
+				...toMember(row),
+				capabilities: [...deps.access().effective(row.role_id)],
+				disabledExtensions: [...deps.features().disabled()],
+				nextUp: await readNextUp(ctx.db, row.id),
+			};
+		},
+	});
+
+	const listFeatures = defineRoute({
+		method: 'get',
+		path: '/features',
+		operationId: 'core.listFeatures',
+		summary: 'Extensions and whether each is turned on',
+		requires: CORE_CAPABILITIES.featuresManage.id,
+		response: z.array(z.object({ id: z.string(), enabled: z.boolean(), canDisable: z.boolean() })),
+		async handle() {
+			const features = deps.features();
+			return deps.extensionIds().map((id) => ({
+				id,
+				enabled: features.isOn(id),
+				canDisable: id !== 'core',
+			}));
+		},
+	});
+
+	const listAiAreas = defineRoute({
+		method: 'get',
+		path: '/ai-areas',
+		operationId: 'core.listAiAreas',
+		summary: 'Areas (extensions) and how far the AI may use each',
+		requires: CORE_CAPABILITIES.aiManage.id,
+		response: z.array(
+			z.object({
+				id: z.string(),
+				sensitive: z.boolean(),
+				/** It offers actions the AI can propose (other areas only matter if sensitive). */
+				usesAi: z.boolean(),
+				access: z.enum(AI_AREA_ACCESS),
+				default: z.enum(AI_AREA_ACCESS),
+			}),
+		),
+		async handle() {
+			const areas = deps.aiAreas();
+			return deps
+				.extensions()
+				.filter((e) => e.id !== 'core')
+				.map((e) => ({
+					id: e.id,
+					sensitive: e.sensitive,
+					usesAi: e.usesAi,
+					access: areas.access(e.id),
+					default: areas.defaultFor(e.id),
+				}));
+		},
+	});
+
+	const listMembers = defineRoute({
+		method: 'get',
+		path: '/members',
+		operationId: 'core.listMembers',
+		summary: 'Active family members',
+		requires: CORE_CAPABILITIES.membersView.id,
+		response: z.array(MemberSchema),
+		async handle(ctx, { actor }) {
+			const rows = await members(ctx.db)
+				.selectFrom('core_members')
+				.selectAll()
+				.where('archived_at', 'is', null)
+				.orderBy('created_at')
+				.execute();
+			// A display sees names and colors only: no role and no private notes.
+			if (actor.kind === 'display')
+				return rows.map((row) => ({ ...toMember(row), roleId: '', about: null }));
+			return rows.map(toMember);
+		},
+	});
+
+	const listProfiles = defineRoute({
+		method: 'get',
+		path: '/profiles',
+		operationId: 'core.listProfiles',
+		summary: 'Profile picker for PIN sign-in (name and color only)',
+		// Only trusted family devices (or signed-in members) see who lives here.
+		requires: 'trusted-device',
+		response: z.array(z.object({ id: z.string(), displayName: z.string(), color: z.string() })),
+		async handle(ctx) {
+			const rows = await members(ctx.db)
+				.selectFrom('core_members')
+				.select(['id', 'display_name', 'color', 'role_id'])
+				.where('archived_at', 'is', null)
+				.orderBy('created_at')
+				.execute();
+			// Only people whose role signs in with a PIN appear in the picker.
+			const access = deps.access();
+			return rows
+				.filter((r) => access.effective(r.role_id).has(CORE_CAPABILITIES.signInPin.id))
+				.map((r) => ({ id: r.id, displayName: r.display_name, color: r.color }));
+		},
+	});
+
+	const familySettings = defineRoute({
+		method: 'get',
+		path: '/settings/family',
+		operationId: 'core.getFamilySettings',
+		summary: 'Family time zone, default language and region formats',
+		requires: 'signedIn',
+		response: FamilySettingsSchema,
+		async handle(ctx) {
+			return ctx.family.settings();
+		},
+	});
+
+	const listDevices = defineRoute({
+		method: 'get',
+		path: '/devices',
+		operationId: 'core.listDevices',
+		summary: 'Trusted family devices',
+		requires: CORE_CAPABILITIES.devicesManage.id,
+		response: z.array(DeviceSchema),
+		async handle() {
+			return (await deps.devices().list()).map(toDevice);
+		},
+	});
+
+	const currentDevice = defineRoute({
+		method: 'get',
+		path: '/devices/current',
+		operationId: 'core.getCurrentDevice',
+		summary: 'The trusted device this request comes from, if any',
+		requires: 'public',
+		response: z.object({ device: z.object({ id: z.string(), name: z.string() }).nullable() }),
+		async handle(_ctx, { device }) {
+			return { device };
+		},
+	});
+
+	const revokeDevice = defineRoute({
+		method: 'delete',
+		path: '/devices/{deviceId}',
+		operationId: 'core.revokeDevice',
+		summary: 'Revoke a trusted device (stops profile picker and PIN sign-in on it)',
+		requires: CORE_CAPABILITIES.devicesManage.id,
+		params: z.object({ deviceId: idSchema('device') }),
+		response: DeviceSchema,
+		status: 200,
+		async handle(_ctx, { params, actor }) {
+			return toDevice(await deps.devices().revoke(actor, params.deviceId));
+		},
+	});
+
+	const MemberParams = z.object({ memberId: MemberIdSchema });
+
+	const setPin = defineRoute({
+		method: 'put',
+		path: '/members/{memberId}/pin',
+		operationId: 'core.setMemberPin',
+		summary: "Set a member's PIN login",
+		requires: CORE_CAPABILITIES.membersManage.id,
+		params: MemberParams,
+		body: z.object({ pin: z.string().regex(/^\d{4,6}$/) }),
+		response: z.object({ ok: z.literal(true) }),
+		status: 200,
+		async handle(ctx, { params, body }) {
+			const member = await findMember(ctx.db, params.memberId);
+			// A PIN is a weak secret: only roles without critical capabilities use one.
+			if (!deps.access().effective(member.role_id).has(CORE_CAPABILITIES.signInPin.id)) {
+				throw new FamosError('conflict', "This member's role signs in with a password, not a PIN");
+			}
+			await deps.identity.setPin({
+				memberId: member.id,
+				pin: body.pin,
+				displayName: member.display_name,
+			});
+			await deps.identity.endSessions(member.id);
+			return { ok: true as const };
+		},
+	});
+
+	const setPassword = defineRoute({
+		method: 'put',
+		path: '/members/{memberId}/password',
+		operationId: 'core.setMemberPassword',
+		summary: "Set a member's email + password login",
+		requires: CORE_CAPABILITIES.membersManage.id,
+		params: MemberParams,
+		body: z.object({ email: z.email(), password: z.string().min(10).max(200) }),
+		response: z.object({ ok: z.literal(true) }),
+		async handle(ctx, { params, body, actor }) {
+			const member = await findMember(ctx.db, params.memberId);
+			await deps.identity.setPasswordLogin({
+				memberId: member.id,
+				...body,
+				displayName: member.display_name,
+			});
+			// A new password signs the member out everywhere, except an admin changing their own.
+			if (actor.kind !== 'member' || actor.memberId !== member.id)
+				await deps.identity.endSessions(member.id);
+			return { ok: true as const };
+		},
+	});
+
+	const signOutEverywhere = defineRoute({
+		method: 'post',
+		path: '/sessions/end',
+		operationId: 'core.signOutEverywhere',
+		summary: "End all of the caller's sessions, on every device",
+		requires: 'signedIn',
+		response: z.object({ ok: z.literal(true) }),
+		status: 200,
+		async handle(_ctx, { actor }) {
+			if (actor.kind !== 'member') throw new FamosError('unauthenticated', 'Sign in required');
+			await deps.identity.endSessions(actor.memberId);
+			return { ok: true as const };
+		},
+	});
+
+	const listDrafts = defineRoute({
+		method: 'get',
+		path: '/drafts',
+		operationId: 'core.listDrafts',
+		summary: 'Drafts awaiting or past a decision',
+		requires: CORE_CAPABILITIES.draftsPropose.id,
+		query: z.object({
+			status: z.enum(DRAFT_STATUSES).optional(),
+			/** Only drafts proposed from this source, e.g. `inbox`. */
+			sourceKind: z.string().max(40).optional(),
+			sourceId: z.string().max(80).optional(),
+			limit: z.coerce.number().int().min(1).max(200).default(50),
+		}),
+		response: z.array(DraftSchema),
+		async handle(ctx, { query, actor }) {
+			let q = ctx.db.withTables<CoreTables>().selectFrom('core_drafts').selectAll();
+			// Drafts addressed to one member (memory, questions) are visible to them alone.
+			q = q.where((eb) =>
+				actor.kind === 'member'
+					? eb.or([eb('for_member', 'is', null), eb('for_member', '=', actor.memberId)])
+					: eb('for_member', 'is', null),
+			);
+			// A waiting draft about a day that has passed is expired, even before the daily job.
+			if (query.status === 'expired') q = q.where('status', 'in', ['expired', ...WAITING_STATUSES]);
+			else if (query.status) q = q.where('status', '=', query.status);
+			if (query.sourceKind) q = q.where('source_kind', '=', query.sourceKind);
+			if (query.sourceId) q = q.where('source_id', '=', query.sourceId);
+			const rows = await q.orderBy('created_at', 'desc').limit(query.limit).execute();
+			const passed = await deps.runner().passedCheck();
+			const shown = rows
+				.map((row): DraftRow => (passed(row) ? { ...row, status: 'expired' } : row))
+				.filter((row) => !query.status || row.status === query.status);
+			return Promise.all(shown.map(view));
+		},
+	});
+
+	const countWaiting = defineRoute({
+		method: 'get',
+		path: '/drafts/waiting',
+		operationId: 'core.countWaitingDrafts',
+		summary: 'How many suggestions wait for a decision (a count only)',
+		requires: CORE_CAPABILITIES.draftsWaiting.id,
+		response: z.object({ count: z.number().int() }),
+		async handle(ctx, { actor }) {
+			// Drafts addressed to a member count for them alone (never for displays or others).
+			const rows = await ctx.db
+				.withTables<CoreTables>()
+				.selectFrom('core_drafts')
+				.select(['action_id', 'status', 'input', 'edited_input'])
+				.where('status', '=', 'pending')
+				.where((eb) =>
+					actor.kind === 'member'
+						? eb.or([eb('for_member', 'is', null), eb('for_member', '=', actor.memberId)])
+						: eb('for_member', 'is', null),
+				)
+				.execute();
+			// One about a day that has passed no longer waits (it expires).
+			const passed = await deps.runner().passedCheck();
+			return { count: rows.filter((row) => !passed(row)).length };
+		},
+	});
+
+	/**
+	 * Which of a source's items have a suggestion waiting that the signed-in member may decide
+	 * (theirs alone, or one they could approve). Lets an extension show an item to the people who
+	 * must decide it without reading the drafts table. Not offered to any model.
+	 */
+	const decidableSources = defineAction({
+		id: 'core.decidableSources',
+		title: 'Which items of a source have a suggestion the member may decide',
+		input: z.object({ sourceKind: z.string().min(1).max(40) }),
+		output: z.object({ sourceIds: z.array(z.string()) }),
+		readOnly: true,
+		async run(uow, { sourceKind }) {
+			if (uow.actor.kind !== 'member') return { sourceIds: [] };
+			const rows = await uow.db
+				.withTables<CoreTables>()
+				.selectFrom('core_drafts')
+				.selectAll()
+				.where('source_kind', '=', sourceKind)
+				.where('status', 'in', ['pending', 'failed'])
+				.where((eb) =>
+					eb.or([
+						eb('for_member', 'is', null),
+						eb('for_member', '=', uow.actor.kind === 'member' ? uow.actor.memberId : ''),
+					]),
+				)
+				.execute();
+			const ids = new Set<string>();
+			const passed = await deps.runner().passedCheck(uow.db);
+			for (const row of rows) {
+				if (passed(row)) continue;
+				if (row.source_id && deps.runner().mayDecide(row, uow.actor)) ids.add(row.source_id);
+			}
+			return { sourceIds: [...ids] };
+		},
+	});
+
+	const expireDrafts = defineJob({
+		name: EXPIRE_JOB,
+		payload: z.object({}),
+		maxAttempts: 3,
+		async handle(ctx) {
+			const count = await deps.runner().expirePassed();
+			if (count > 0) ctx.logger.info({ count }, 'suggestions about a passed day expired');
+			await scheduleExpiry(ctx);
+		},
+	});
+
+	const DraftParams = z.object({ draftId: idSchema('draft') });
+	const view = async (row: DraftRow) =>
+		toDraft(row, deps.runner().undoStep(row) !== null, await deps.runner().mayExist(row));
+
+	const approve = defineRoute({
+		method: 'post',
+		path: '/drafts/{draftId}/approve',
+		operationId: 'core.approveDraft',
+		summary: 'Approve (optionally edit) and apply a draft',
+		requires: CORE_CAPABILITIES.draftsApprove.id,
+		params: DraftParams,
+		body: z.object({ input: z.unknown().optional() }),
+		response: DraftSchema,
+		async handle(_ctx, { params, body, actor }) {
+			return view(await deps.runner().approveDraft(params.draftId, actor, body.input));
+		},
+	});
+
+	const reject = defineRoute({
+		method: 'post',
+		path: '/drafts/{draftId}/reject',
+		operationId: 'core.rejectDraft',
+		summary: 'Reject a draft',
+		requires: CORE_CAPABILITIES.draftsApprove.id,
+		params: DraftParams,
+		response: DraftSchema,
+		async handle(_ctx, { params, actor }) {
+			return view(await deps.runner().rejectDraft(params.draftId, actor));
+		},
+	});
+
+	const undo = defineRoute({
+		method: 'post',
+		path: '/drafts/{draftId}/undo',
+		operationId: 'core.undoDraft',
+		summary: "Take back an applied draft (Undo), with its action's inverse",
+		requires: CORE_CAPABILITIES.draftsApprove.id,
+		params: DraftParams,
+		response: DraftSchema,
+		async handle(_ctx, { params, actor }) {
+			return view(await deps.runner().undoDraft(params.draftId, actor));
+		},
+	});
+
+	return defineExtension({
+		id: 'core',
+		migrations: coreMigrations,
+		actions: [
+			decidableSources,
+			createMember,
+			updateMember,
+			setMyLanguage,
+			setMyNextUp,
+			archiveMember,
+			setFeatureEnabled,
+			setAiAreaAccess,
+			updateFamilySettings,
+			...languages.actions,
+			...deps.themes.actions,
+			createRole,
+			updateRole,
+			deleteRole,
+			...autoApproval.actions,
+			...deps.notifications.actions,
+			...deps.search.actions,
+			...memory.actions,
+		],
+		jobs: [
+			...languages.jobs,
+			...deps.themes.jobs,
+			...deps.notifications.jobs,
+			...autoApproval.jobs,
+			pruneIdempotency,
+			expireDrafts,
+			...deps.search.jobs,
+		],
+		notifications: [draftWaiting, backupFailed, ...autoApproval.notifications],
+		capabilities: Object.values(CORE_CAPABILITIES),
+		routes: [
+			listRoles,
+			setupStatus,
+			setup,
+			me,
+			listFeatures,
+			listAiAreas,
+			listMembers,
+			listProfiles,
+			familySettings,
+			listDevices,
+			currentDevice,
+			revokeDevice,
+			setPin,
+			setPassword,
+			signOutEverywhere,
+			listDrafts,
+			countWaiting,
+			approve,
+			reject,
+			undo,
+			...languages.routes,
+			...deps.themes.routes,
+			...autoApproval.routes,
+			...deps.notifications.routes,
+			...deps.search.routes,
+			...memory.routes,
+		],
+		events: [...coreEvents, ...languages.events, ...deps.themes.events],
+		register: async (ctx) => {
+			// First pruning a day after start; the job schedules the next one itself.
+			await schedulePrune(ctx, ctx.clock.now() + 24 * 60 * 60 * 1000);
+			// Suggestions about a day that has passed expire shortly after midnight (family time).
+			await scheduleExpiry(ctx);
+		},
+	});
+}

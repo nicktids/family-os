@@ -1,0 +1,23 @@
+node_modules/
+dist/
+build/
+.svelte-kit/
+.turbo/
+coverage/
+*.tsbuildinfo
+.env
+.env.*
+!.env.example
+.DS_Store
+# runtime data
+/data/
+apps/server/data/
+# generated
+vite.config.ts.timestamp-*
+.vitest/
+# Playwright
+apps/e2e/test-results/
+apps/e2e/playwright-report/
+# Claude Code agent worktrees
+.claude/worktrees/
+docker-compose.override.yml

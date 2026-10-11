@@ -1,0 +1,38 @@
+{
+	"$schema": "https://docs.renovatebot.com/renovate-schema.json",
+	"extends": ["config:recommended", ":pinAllExceptPeerDependencies", ":semanticCommits"],
+	"schedule": ["before 6am on monday"],
+	"timezone": "Europe/Istanbul",
+	"prConcurrentLimit": 5,
+	"vulnerabilityAlerts": { "enabled": true, "schedule": ["at any time"], "labels": ["security"] },
+	"packageRules": [
+		{
+			"matchPackageNames": ["better-auth", "@better-auth/**"],
+			"groupName": "better-auth",
+			"schedule": ["at any time"]
+		},
+		{
+			"matchPackageNames": [
+				"svelte",
+				"@sveltejs/**",
+				"svelte-check",
+				"vite",
+				"@tailwindcss/**",
+				"tailwindcss"
+			],
+			"groupName": "svelte toolchain"
+		},
+		{ "matchPackageNames": ["hono", "@hono/**"], "groupName": "hono" },
+		{ "matchPackageNames": ["kysely", "better-sqlite3"], "groupName": "database" },
+		{
+			"matchPackageNames": ["typescript"],
+			"allowedVersions": "<7",
+			"description": "Svelte tooling needs the TS 6 compiler API until TS 7.1."
+		},
+		{
+			"matchDepTypes": ["devDependencies"],
+			"matchUpdateTypes": ["patch", "minor"],
+			"groupName": "dev dependencies (non-major)"
+		}
+	]
+}

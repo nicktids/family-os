@@ -1,0 +1,25 @@
+@import "tailwindcss";
+@import "@famos/ui/theme.css";
+@import "@famos/ui/styles.css";
+@import "@famos/ui/type.css";
+
+/* Tailwind must see classes used by shared components and extension UIs. */
+@source "../../../packages/ui/src";
+@source "../../../extensions";
+
+/*
+ * Phones have a fixed tab bar at the bottom: whatever is scrolled into view (focus, a form's
+ * save button) must stop above it, not behind it.
+ */
+@media (width < 48rem) {
+	html {
+		scroll-padding-bottom: calc(5rem + env(safe-area-inset-bottom));
+	}
+}
+
+/* Phones show the bottom tab bar; floating add buttons sit above it (Fab reads this). */
+@media (max-width: 767px) {
+	:root {
+		--fab-bottom: 4rem;
+	}
+}

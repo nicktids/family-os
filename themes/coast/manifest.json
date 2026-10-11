@@ -1,0 +1,7 @@
+{
+	"id": "coast",
+	"name": "Coast",
+	"version": "1.0.0",
+	"famos": ">=0.1.0",
+	"authors": ["FamilyOS"]
+}

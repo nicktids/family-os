@@ -1,0 +1,276 @@
+import {
+	type Actor,
+	createHandleTable,
+	defineEvent,
+	defineJob,
+	isLlmError,
+	type JobContext,
+	type LlmChatMessage,
+	type MemberId,
+} from '@famos/sdk';
+import { todayIn, zoned } from '@famos/time';
+import { z } from 'zod';
+import {
+	CHAT_FEATURE,
+	deltaPayload,
+	donePayload,
+	SUMMARIZE_JOB,
+	TURN_JOB,
+} from '../contract/index.ts';
+import { formatWeekday } from './format.ts';
+import { systemPrompt } from './prompt.ts';
+import { tables } from './store.ts';
+import { type AssistantTool, areaOf, chatTools, narrow, type RecordedCall } from './tools.ts';
+
+/** The most notes sent to the model, and the most characters of them. */
+export const MEMORY_MAX_NOTES = 20;
+export const MEMORY_MAX_CHARS_TOTAL = 1500;
+
+/**
+ * The member's notes, newest first, capped. Read as the AI working for that member, so core hands
+ * over theirs and nobody else's.
+ */
+async function recallMemories(ctx: Pick<JobContext, 'actions'>, actor: Actor): Promise<string[]> {
+	try {
+		const result = await ctx.actions.invoke<{ text: string }[]>(
+			'core.recallMemories',
+			{ limit: MEMORY_MAX_NOTES },
+			actor,
+		);
+		if (result.status !== 'applied') return [];
+		const notes: string[] = [];
+		let total = 0;
+		for (const note of result.output) {
+			if (total + note.text.length > MEMORY_MAX_CHARS_TOTAL) break;
+			total += note.text.length;
+			notes.push(note.text);
+		}
+		return notes;
+	} catch {
+		// Notes are a convenience: an answer is better than none.
+		return [];
+	}
+}
+
+export const assistantDelta = defineEvent('assistant.delta', deltaPayload);
+export const assistantDone = defineEvent('assistant.done', donePayload);
+
+/** Messages of a thread sent verbatim; older ones live in the summary. */
+export const KEEP_VERBATIM = 12;
+/** When this many messages are not summarised yet, the summariser runs. */
+export const SUMMARIZE_AFTER = 30;
+const MAX_STEPS = 8;
+const CHAT_TIMEOUT_MS = 120_000;
+
+/**
+ * One answer of the assistant. The message was stored by `assistant.sendMessage`; this
+ * job builds the tools the asking member may use, runs the model's tool loop, streams the text to
+ * that member only, and stores the result. Idempotent: a finished message is left alone, and a
+ * restarted turn starts the answer again.
+ */
+export const turnJob = defineJob({
+	name: TURN_JOB,
+	payload: z.object({ threadId: z.string(), messageId: z.string() }),
+	timeoutMs: 150_000,
+	maxAttempts: 2,
+	lane: 'long',
+	backoff: () => 5_000,
+	async handle(ctx, { threadId, messageId }, run) {
+		const db = tables(ctx.db);
+		const reply = await db
+			.selectFrom('assistant_messages')
+			.selectAll()
+			.where('id', '=', messageId)
+			.executeTakeFirst();
+		if (!reply || reply.status === 'done' || reply.status === 'failed') return;
+		const thread = await db
+			.selectFrom('assistant_threads')
+			.selectAll()
+			.where('id', '=', threadId)
+			.executeTakeFirst();
+		if (!thread) return;
+		const memberId = thread.member_id;
+
+		const finish = async (fields: {
+			status: 'done' | 'failed';
+			content?: string;
+			errorCode?: string | null;
+			calls?: RecordedCall[];
+		}) => {
+			await db
+				.updateTable('assistant_messages')
+				.set({
+					status: fields.status,
+					content: fields.content ?? '',
+					error_code: fields.errorCode ?? null,
+					tool_calls: fields.calls?.length ? JSON.stringify(fields.calls) : null,
+				})
+				.where('id', '=', messageId)
+				.execute();
+			await ctx.events.emitTo(memberId, assistantDone, {
+				threadId,
+				messageId,
+				status: fields.status,
+			});
+		};
+
+		const member = (await ctx.family.members()).find((m) => m.id === memberId);
+		// Someone archived or demoted since asking gets no answer: the assistant never exceeds them.
+		if (!member) return finish({ status: 'failed', errorCode: 'forbidden' });
+		const asker: Actor = { kind: 'member', memberId: member.id as MemberId, roleId: member.roleId };
+		if (!ctx.access.can(asker, 'assistant.use'))
+			return finish({ status: 'failed', errorCode: 'forbidden' });
+
+		const policy = await ctx.llm.policy(CHAT_FEATURE, 'smart');
+		if (!policy.enabled) return finish({ status: 'failed', errorCode: 'disabled' });
+
+		await db
+			.updateTable('assistant_messages')
+			.set({ status: 'streaming', content: '' })
+			.where('id', '=', messageId)
+			.execute();
+		if (run.attempt > 1)
+			await ctx.events.emitTo(memberId, assistantDelta, {
+				threadId,
+				messageId,
+				text: '',
+				reset: true,
+			});
+
+		const actor: Actor = {
+			kind: 'ai',
+			source: 'assistant',
+			onBehalfOf: member.id as MemberId,
+			roleId: member.roleId,
+			// Results of local-only areas may reach the model only if it runs on the family's network.
+			local: policy.local,
+		};
+		const history = await db
+			.selectFrom('assistant_messages')
+			.select(['role', 'content', 'created_at'])
+			.where('thread_id', '=', threadId)
+			.where('status', '=', 'done')
+			.where('created_at', '<', reply.created_at)
+			.orderBy('created_at', 'desc')
+			.orderBy('id', 'desc')
+			.limit(KEEP_VERBATIM)
+			.execute();
+		const kept = history.filter((m) => m.content !== '').reverse();
+		const messages: LlmChatMessage[] = kept.map((m) => ({
+			role: m.role === 'assistant' ? 'assistant' : 'user',
+			content: m.content,
+		}));
+		while (messages[0]?.role === 'assistant') messages.shift();
+		const question = kept.findLast((m) => m.role === 'user')?.content ?? '';
+
+		// What the asker may use: their capabilities and the AI sandbox filter the tools.
+		const offered: AssistantTool[] = [
+			...ctx.actions.aiReadTools({ local: policy.local, actor }).map((info) => ({
+				actionId: info.id,
+				kind: 'read' as const,
+				info,
+			})),
+			...ctx.actions.aiCatalog({ local: policy.local, actor }).map((info) => ({
+				actionId: info.id,
+				kind: 'draft' as const,
+				info,
+			})),
+		];
+		const tools = narrow(offered, question, (key) => ctx.vocabulary(key));
+
+		// The member's own notes go into their own threads only, and only where the family lets
+		// people's details reach the model (core is not an area; the privacy switch governs it).
+		const memories = policy.sendPeople ? await recallMemories(ctx, actor) : [];
+
+		const family = await ctx.family.members();
+		const table = createHandleTable();
+		const handles = family.map((m) => ({ ...m, handle: table.add('member', m.id) }));
+		const settings = await ctx.family.settings();
+		const now = ctx.clock.now();
+		const today = todayIn(settings.timeZone, now);
+		const calls: RecordedCall[] = [];
+		const inject = {
+			'core.addMemory': { source: 'assistant' },
+		};
+
+		try {
+			const result = await ctx.llm.chat({
+				role: 'smart',
+				feature: CHAT_FEATURE,
+				areas: ['assistant', ...new Set(tools.map((t) => areaOf(t.actionId)))],
+				system: systemPrompt({
+					today,
+					weekday: formatWeekday(today),
+					now: zoned(now, settings.timeZone).toPlainTime().toString({ smallestUnit: 'minute' }),
+					weekStart: settings.weekStart,
+					timeZone: settings.timeZone,
+					// The asker's own language, else the family's.
+					locale: member.locale ?? settings.locale,
+					hourCycle: settings.hourCycle,
+					asker: policy.sendPeople
+						? { name: member.displayName, handle: table.handleOf(member.id) as string }
+						: null,
+					members: policy.sendPeople
+						? handles.map((m) => ({ handle: m.handle, name: m.displayName, about: m.about }))
+						: null,
+					summary: thread.summarized_count > 0 ? thread.summary : null,
+					hasTools: tools.length > 0,
+					memories,
+				}),
+				messages,
+				tools: chatTools(tools, {
+					actions: ctx.actions,
+					actor,
+					table,
+					turnId: messageId,
+					calls,
+					inject,
+				}),
+				maxSteps: MAX_STEPS,
+				timeoutMs: CHAT_TIMEOUT_MS,
+				memberId,
+				jobId: run.id,
+				onText: (text) => {
+					void ctx.events.emitTo(memberId, assistantDelta, { threadId, messageId, text });
+				},
+			});
+			// The step limit can end the loop on a tool call: no answer text, which is a failure
+			// (the drafts it made still stand and are listed).
+			await finish(
+				result.text
+					? { status: 'done', content: result.text, calls }
+					: { status: 'failed', errorCode: 'no_answer', calls },
+			);
+			const total = await db
+				.selectFrom('assistant_messages')
+				.select((eb) => eb.fn.countAll<number>().as('n'))
+				.where('thread_id', '=', threadId)
+				.where('status', '=', 'done')
+				.executeTakeFirstOrThrow();
+			if (Number(total.n) - thread.summarized_count > SUMMARIZE_AFTER)
+				await ctx.enqueue(
+					SUMMARIZE_JOB,
+					{ threadId },
+					{ dedupeKey: `summarize:${threadId}`, maxAttempts: 3 },
+				);
+		} catch (error) {
+			if (isLlmError(error)) {
+				if (error.retryable && run.attempt < run.maxAttempts) {
+					await db
+						.updateTable('assistant_messages')
+						.set({ status: 'pending', content: '' })
+						.where('id', '=', messageId)
+						.execute();
+					throw error;
+				}
+				return finish({ status: 'failed', errorCode: error.code, calls });
+			}
+			// Never log the conversation: the error alone says what went wrong.
+			ctx.logger.error(
+				{ threadId, err: error instanceof Error ? error.name : 'unknown' },
+				'assistant turn failed',
+			);
+			return finish({ status: 'failed', errorCode: 'unavailable', calls });
+		}
+	},
+});

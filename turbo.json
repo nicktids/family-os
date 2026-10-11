@@ -1,0 +1,40 @@
+{
+	"$schema": "https://turborepo.com/schema.json",
+	"tasks": {
+		"build": {
+			"dependsOn": ["^build", "gen"],
+			"outputs": ["dist/**", "build/**"]
+		},
+		"gen": {
+			"dependsOn": ["^gen"],
+			"outputs": ["openapi.json", "src/generated/**"]
+		},
+		"typecheck": {
+			"dependsOn": ["gen", "^gen"]
+		},
+		"dev": {
+			"cache": false,
+			"persistent": true
+		},
+		"@famos/api-client#gen": {
+			"dependsOn": ["@famos/server#gen"],
+			"inputs": [
+				"$TURBO_DEFAULT$",
+				"!src/generated/**",
+				{
+					"mode": "jit",
+					"globs": ["$TURBO_ROOT$/apps/server/openapi.json"]
+				}
+			],
+			"outputs": ["src/generated/**"]
+		},
+		"@famos/web#gen": {
+			"outputs": [".svelte-kit/types/**", ".svelte-kit/tsconfig.json", ".svelte-kit/ambient.d.ts"]
+		},
+		"@famos/server#gen": {
+			"dependsOn": [],
+			"cache": false,
+			"outputs": ["openapi.json"]
+		}
+	}
+}
