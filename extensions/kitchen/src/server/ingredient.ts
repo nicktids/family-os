@@ -1,18 +1,16 @@
 import {
 	amountOnlyPattern,
 	amountPattern,
+	SHOPPING_QUANTITY_MAX,
+	SHOPPING_TITLE_MAX,
 	type ShoppingItemInput,
 	splitAmount,
 } from '@famos/ext-lists/contract';
 
-/** Shopping item limits (lists contract). */
-const TITLE_MAX = 120;
-const QUANTITY_MAX = 40;
-
 /**
- * The words that read an ingredient line, from the language packs: units ("tbsp", "tin"), words
- * that join an amount to the product ("2 cups of flour"), and preparation notes ("crumbled",
- * "finely chopped") that say how to use it rather than what to buy.
+ * The words that read an ingredient line, from the language packs: units ("tbsp", "tin") and
+ * words that join an amount to the product ("2 cups of flour"), and preparation notes ("crumbled",
+ * "zest and juice") that say how to use it rather than what to buy.
  */
 export interface IngredientWords {
 	units: readonly string[];
@@ -44,9 +42,10 @@ const capitalise = (text: string, locale: string) => {
 /**
  * Reads a recipe's ingredient line as a shopping item: "60 g feta, crumbled" becomes "Feta" with
  * the quantity "60 g"; "1 tin chopped tomatoes (400 g)" becomes "Chopped tomatoes", "1 tin
- * (400 g)". A note after a comma is dropped when it names a preparation, and one that is only an
- * amount ("Lime, 1") becomes the quantity; an amount in brackets joins the quantity and other
- * bracketed notes are dropped. Null for a line with no product.
+ * (400 g)". A note after a comma is dropped when it names a preparation ("zest and juice",
+ * "finely chopped"), and one that is only an amount ("Lime, 1") becomes the quantity; other
+ * parts stay ("salt, pepper" is two products). An amount in brackets joins the quantity and
+ * other bracketed notes are dropped. Null for a line with no product.
  */
 export function ingredientToItem(
 	line: string,
@@ -86,7 +85,7 @@ export function ingredientToItem(
 		? [quantity, ...extraAmounts].join(' ')
 		: extraAmounts.map((a) => a.slice(1, -1)).join(' ');
 	return {
-		title: capitalise(title, locale).slice(0, TITLE_MAX),
-		...(amount && { quantity: amount.slice(0, QUANTITY_MAX) }),
+		title: capitalise(title, locale).slice(0, SHOPPING_TITLE_MAX),
+		...(amount && { quantity: amount.slice(0, SHOPPING_QUANTITY_MAX) }),
 	};
 }

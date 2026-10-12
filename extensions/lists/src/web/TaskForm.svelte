@@ -1,6 +1,7 @@
 <script lang="ts">
+	import { Textarea } from '@famos/ui/textarea';
 	import { orderedWeekdays, weekdayNames } from '@famos/time';
-	import { Chip, MemberChips, Segmented } from '@famos/ui/famos';
+	import { Chip, LimitCounter, MemberChips, Segmented } from '@famos/ui/famos';
 	import { Input } from '@famos/ui/input';
 	import { Label } from '@famos/ui/label';
 	import { TASK_TITLE_MAX } from '../contract/index.js';
@@ -61,10 +62,16 @@
 		<Input
 			id={id('title')}
 			bind:value={value.title}
-			maxlength={TASK_TITLE_MAX}
 			required
 			aria-invalid={flag('title')}
+			aria-describedby={id('title-limit')}
 			autocomplete="off"
+		/>
+		<LimitCounter
+			id={id('title-limit')}
+			text={value.title}
+			max={TASK_TITLE_MAX}
+			tooLong={(counter) => t('too_long', { counter })}
 		/>
 	</div>
 
@@ -141,12 +148,12 @@
 			>{t('field_notes')}
 			<span class="text-ink-soft font-normal">{t('optional')}</span>{@render check('notes')}</Label
 		>
-		<textarea
+		<Textarea
 			id={id('notes')}
 			bind:value={value.notes}
 			maxlength={2000}
-			rows="3"
+			rows={3}
 			class="border-input focus-visible:border-ring focus-visible:ring-ring/50 w-full rounded-md border bg-transparent px-2.5 py-2 text-base outline-none focus-visible:ring-3 md:text-sm"
-		></textarea>
+		></Textarea>
 	</div>
 </div>

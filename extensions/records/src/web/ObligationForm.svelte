@@ -1,9 +1,11 @@
 <script lang="ts">
+	import { Textarea } from '@famos/ui/textarea';
 	import { MemberChips } from '@famos/ui/famos';
 	import { Input } from '@famos/ui/input';
 	import { Label } from '@famos/ui/label';
 	import { useRecords } from './i18n.js';
 	import type { ObligationFormValue } from './form.js';
+	import { type RepeatUnit, withRepeat } from './repeat.js';
 
 	/**
 	 * The form of one obligation (it opens in the side panel or the phone sheet): what, when, how
@@ -53,7 +55,12 @@
 
 		<div class="grid content-start gap-1.5">
 			<Label for={id('repeat')}>{t('field_repeat')}</Label>
-			<select id={id('repeat')} bind:value={value.repeat} class={field}>
+			<select
+				id={id('repeat')}
+				value={value.repeat}
+				onchange={(e) => (value = withRepeat(value, e.currentTarget.value as RepeatUnit))}
+				class={field}
+			>
 				<option value="none">{t('repeat_none')}</option>
 				<option value="months">{t('repeat_months')}</option>
 				<option value="years">{t('repeat_years')}</option>
@@ -103,11 +110,12 @@
 			>{t('field_notes')}
 			<span class="text-ink-soft font-normal">{t('optional')}</span></Label
 		>
-		<textarea
+		<Textarea
 			id={id('notes')}
 			bind:value={value.notes}
 			maxlength={2000}
-			rows="2"
-			class="{field} min-h-[84px] py-2"></textarea>
+			rows={2}
+			class="{field} min-h-[84px] py-2"
+		></Textarea>
 	</div>
 </div>

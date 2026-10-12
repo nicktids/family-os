@@ -32,7 +32,18 @@ describe('ingredientToItem', () => {
 		expect(en('1 lemon (optional)')).toEqual({ title: 'Lemon', quantity: '1' });
 	});
 
-	it('drops a preparation note after a comma, keeps other parts', () => {
+	it('drops the notes that say how to use the product', () => {
+		expect(en('Lemon, zest and juice')).toEqual({ title: 'Lemon' });
+		expect(en('2 limes, juice only')).toEqual({ title: 'Limes', quantity: '2' });
+		expect(en('Butter, plus extra for the pan')).toEqual({ title: 'Butter' });
+		expect(en('Chicken breast, 500 g, skinned')).toEqual({
+			title: 'Chicken breast',
+			quantity: '500 g',
+		});
+		expect(tr('Limon, kabuğu ve suyu')).toEqual({ title: 'Limon' });
+	});
+
+	it('drops a preparation note after a comma', () => {
 		expect(en('60 g feta, crumbled')).toEqual({ title: 'Feta', quantity: '60 g' });
 		expect(en('1 onion, finely chopped')).toEqual({ title: 'Onion', quantity: '1' });
 		expect(en('Salt, to taste')).toEqual({ title: 'Salt' });
