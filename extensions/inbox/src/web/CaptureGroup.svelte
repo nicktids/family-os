@@ -10,7 +10,7 @@
 	import { approvals, type Edits, withEdit } from './edits.js';
 	import { captureTime } from './format.js';
 	import { useInbox } from './i18n.js';
-	import { type Capture, captureLine } from './item-view.js';
+	import { approveSelectedKey, type Capture, captureLine } from './item-view.js';
 
 	/**
 	 * One capture and what was found in it, decided together: a line saying what it is, the
@@ -64,6 +64,8 @@
 	async function addSelected() {
 		if (busy || picked.length === 0) return;
 		busy = true;
+		// Said the way the button said it: "added" only when everything adds something.
+		const adds = approveSelectedKey(picked) === 'add_selected';
 		const undoable: string[] = [];
 		let added = 0;
 		let failed = 0;
@@ -86,7 +88,9 @@
 			return;
 		}
 		const message =
-			failed > 0 ? t('added_partial', { count: added, failed }) : t('added_n', { count: added });
+			failed > 0
+				? t(adds ? 'added_partial' : 'done_partial', { count: added, failed })
+				: t(adds ? 'added_n' : 'done_n', { count: added });
 		app.toast(
 			message,
 			undoable.length
@@ -213,7 +217,7 @@
 				disabled={busy}
 			/>
 			<Button size="lg" disabled={busy || picked.length === 0} onclick={addSelected}
-				>{t('add_selected', { n: picked.length })}</Button
+				>{t(approveSelectedKey(picked), { n: picked.length })}</Button
 			>
 		</footer>
 	{:else if removable}
