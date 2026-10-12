@@ -340,7 +340,10 @@ Ayrıca 20 Ekim Salı günü saat 18:00'de veli toplantımız yapılacaktır.`,
 					who.includes(m.Fatma as string)
 				);
 			}),
-			has('lists.addTask', 'pick up the medicine', (i) => /ilaç|eczane/i.test(String(i.title))),
+			has('lists.addTask', 'pick up the medicine', (i) =>
+				// Lower-cased the Turkish way: "İlaç" is not matched by /ilaç/i.
+				/ilaç|eczane/.test(String(i.title).toLocaleLowerCase('tr')),
+			),
 		],
 	},
 	{
@@ -540,6 +543,30 @@ const LIST_CASES: Case[] = [
 				pass: (ds) => of(ds, 'lists.checkShoppingItem').length === 1,
 			},
 			none('lists.addShoppingItems'),
+		],
+	},
+	{
+		// Found in use: with more open items than fit in the prompt, the newest were cut and the
+		// model ticked off a near one ("Picture hooks") instead of the one named.
+		name: 'Ticks off the newest of many similar items (English)',
+		shopping: [
+			...Array.from({ length: 64 }, (_, i) => ({ title: `Pantry staple ${i + 1}` })),
+			{ list: 'Hardware store', title: 'Picture hooks' },
+			{ list: 'Hardware store', title: 'Picture wire' },
+		],
+		text: 'Got the picture wire already, tick it off the Hardware store list',
+		checks: [
+			{
+				label: 'lists.checkShoppingItem: the picture wire, done',
+				pass: (ds, _m, _r, _t, listed) =>
+					of(ds, 'lists.checkShoppingItem').some(
+						(d) => d.input.id === listed['Picture wire'] && d.input.done === true,
+					),
+			},
+			{
+				label: 'no other item ticked',
+				pass: (ds) => of(ds, 'lists.checkShoppingItem').length === 1,
+			},
 		],
 	},
 	{

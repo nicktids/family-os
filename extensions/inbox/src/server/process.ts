@@ -1,5 +1,6 @@
 import { languageName } from '@famos/i18n';
 import {
+	type ActionInvoker,
 	type AiActionInfo,
 	type AiContext,
 	AiContextSchema,
@@ -13,6 +14,7 @@ import {
 	type LlmFile,
 	type ModelRole,
 	repairInput,
+	wordsNamed,
 } from '@famos/sdk';
 import { formatDate, numericDateOrder, todayIn } from '@famos/time';
 import { z } from 'zod';
@@ -29,7 +31,7 @@ import { itemChanged, PROCESS_JOB } from './items.ts';
 import { filesOf, ITEM_KIND, type ItemRow, type StoredFile, tables } from './store.ts';
 
 /** Bump when the prompt changes meaningfully; stored on every draft for later comparison. */
-export const PROMPT_VERSION = 'inbox.extract/17';
+export const PROMPT_VERSION = 'inbox.extract/18';
 
 const MODEL_TYPES = new Set([
 	'image/jpeg',
@@ -496,6 +498,27 @@ export function withoutTimeAsAllDay(
 }
 
 /**
+ * Whether a proposal points at an existing record (an action with a target title) that is not the
+ * one the shared text names: none of its words are in the text, or another listed record shares
+ * more words with it. "Got the picture wire" names Picture wire (two words), not Picture hooks
+ * (one). Counting words, not matching them all, lets "paid" stand for "Pay the … fee". Names are
+ * data, so this works in any language.
+ */
+export async function namesOtherTarget(
+	actions: Pick<ActionInvoker, 'targetTitle'>,
+	actionId: string,
+	input: Record<string, unknown>,
+	text: string,
+	listed: readonly string[],
+): Promise<boolean> {
+	const title = await actions.targetTitle(actionId, input);
+	if (title === null) return false;
+	const named = wordsNamed(text, title);
+	if (named === 0) return true;
+	return listed.some((other) => wordsNamed(text, other) > named);
+}
+
+/**
  * Fields that name members the item itself never names: the model chose them (from a relation,
  * a description or a guess), so a person checks them. A field counts when its value is a member
  * id or a list of member ids; a member counts as named when the item contains any word of their
@@ -610,7 +633,7 @@ ${vocabularies ? `${vocabularies}\nReuse these exact words where a field takes s
 		: ''
 }Rules:
 - Propose only what the item asks for or clearly implies. One item can yield several proposals (a trip has a date for the calendar and a fee to pay as a task). If nothing is actionable, return no proposals.
-- In member fields, refer to members only by their handle from the list above (for example member:1); never invent handles. When the item clearly concerns one member without naming them (for example a school notice and only one member's description mentions that school or class), choose that member and list the field in uncertainFields. Otherwise leave member lists empty ([]).${
+- In member fields, refer to members only by their handle from the list above (for example member:1); never invent handles. When the item clearly concerns one or more members without naming them (for example a school notice and only one member's description mentions that school or class), choose them and list the field in uncertainFields. Otherwise leave member lists empty ([]).${
 		input.sharer
 			? `
 - The person who shared the item (${input.sharer.handle}) is the one a message addressed to "you" or written about "me" or "my" concerns: when the item is clearly about them alone, use them in the member field instead of leaving it empty. A message to the whole household or group concerns everyone: leave the list empty.`
@@ -745,6 +768,8 @@ async function extract(ctx: JobContext, row: ItemRow, run: JobRun) {
 		}));
 		const contexts = await readRecordContexts(ctx, catalog, table);
 		const records = contexts.filter((group) => !group.plain);
+		// What the model could point at: a proposal on one of these must be the one the text names.
+		const listedTitles = records.flatMap((group) => group.items.map((item) => item.label));
 		const vocabularies = contexts.filter((group) => group.plain);
 		const sharer = family.find((m) => m.id === row.created_by);
 		const handles = table.toId;
@@ -833,6 +858,17 @@ async function extract(ctx: JobContext, row: ItemRow, run: JobRun) {
 			}
 			const { input, guessed } = prepare(proposal);
 			if (namesUnknownRecord(input, records)) {
+				skipped++;
+				skippedUnknown++;
+				continue;
+			}
+			// A change to an existing item must be about something the shared text names: with many
+			// similar items a model reaches for a near one. Files are read by the model alone, so an
+			// item with files cannot be checked against its text.
+			if (
+				files.length === 0 &&
+				(await namesOtherTarget(ctx.actions, proposal.action, input, text, listedTitles))
+			) {
 				skipped++;
 				skippedUnknown++;
 				continue;

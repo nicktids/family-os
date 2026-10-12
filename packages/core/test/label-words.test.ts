@@ -1,5 +1,22 @@
+import { labelNamesTitle, significantWords, wordsNamed } from '@famos/sdk';
 import { describe, expect, it } from 'vitest';
-import { labelNamesTitle, significantWords } from '../src/label-words.ts';
+
+describe('wordsNamed', () => {
+	it('counts the title words a text says, in any order and plural', () => {
+		expect(wordsNamed('Got the E27 light bulbs', 'Light bulbs E27')).toBe(3);
+		expect(wordsNamed('Got the picture wire already', 'Picture hooks')).toBe(1);
+		expect(wordsNamed('Got the picture wire already', 'Picture wire')).toBe(2);
+		expect(wordsNamed('I paid the swim course fee', 'Pay the swim course fee')).toBe(4);
+		expect(wordsNamed('GOT THE LIGHT BULB', 'light bulbs')).toBe(2);
+	});
+
+	it('works in any language and for titles without a significant word', () => {
+		expect(wordsNamed('Faturaları öde', 'Faturaları öde (Ekim)')).toBe(2);
+		expect(wordsNamed('Süt aldım', 'Yulaf sütü')).toBe(0);
+		expect(wordsNamed('Buy 4 of them', '4')).toBe(1);
+		expect(wordsNamed('Buy five', '4')).toBe(0);
+	});
+});
 
 describe('significantWords', () => {
 	it('keeps letters and digits of three or more characters, lower case', () => {

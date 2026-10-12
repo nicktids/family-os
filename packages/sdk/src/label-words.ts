@@ -28,3 +28,19 @@ export function labelNamesTitle(label: string, title: string): boolean {
 	const within = (a: string[], b: string[]) => a.every((w) => b.some((h) => sameWord(w, h)));
 	return within(wanted, have) || within(have, wanted);
 }
+
+/**
+ * How many significant words of `title` a text says as whole words (a trailing plural "s" does
+ * not matter), in any order. "I paid the swim course fee" says four of "Pay the swim course
+ * fee"; "Got the picture wire" says one of "Picture hooks" and two of "Picture wire". A title
+ * without a significant word ("4") counts 1 when the text contains it as written, else 0.
+ */
+export function wordsNamed(text: string, title: string): number {
+	const have = significantWords(text);
+	const wanted = significantWords(title);
+	if (wanted.length === 0) {
+		const plain = (s: string) => s.trim().replace(/\s+/gu, ' ').toLocaleLowerCase();
+		return plain(title) !== '' && plain(text).includes(plain(title)) ? 1 : 0;
+	}
+	return wanted.filter((w) => have.some((h) => sameWord(w, h))).length;
+}
