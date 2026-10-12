@@ -13,8 +13,8 @@ import {
 	type JobContext,
 	type LlmFile,
 	type ModelRole,
+	namedShares,
 	repairInput,
-	wordsNamed,
 } from '@famos/sdk';
 import { formatDate, numericDateOrder, todayIn } from '@famos/time';
 import { z } from 'zod';
@@ -499,23 +499,33 @@ export function withoutTimeAsAllDay(
 
 /**
  * Whether a proposal points at an existing record (an action with a target title) that is not the
- * one the shared text names: none of its words are in the text, or another listed record shares
- * more words with it. "Got the picture wire" names Picture wire (two words), not Picture hooks
- * (one). Counting words, not matching them all, lets "paid" stand for "Pay the … fee". Names are
- * data, so this works in any language.
+ * one the shared text names: the text names none of it, or names another listed record more
+ * (by the share of its words, rare words counting more). "Got the picture wire" names Picture
+ * wire, not Picture hooks; "I paid the swim course fee" still names "Pay the swim course fee".
+ * Names are data, so this works in any language.
  */
 export async function namesOtherTarget(
 	actions: Pick<ActionInvoker, 'targetTitle'>,
 	actionId: string,
 	input: Record<string, unknown>,
 	text: string,
-	listed: readonly string[],
+	listed: readonly { id: string; label: string }[],
 ): Promise<boolean> {
 	const title = await actions.targetTitle(actionId, input);
 	if (title === null) return false;
-	const named = wordsNamed(text, title);
-	if (named === 0) return true;
-	return listed.some((other) => wordsNamed(text, other) > named);
+	// The target's own entry in the list may be worded differently ("Car insurance" for "Car
+	// insurance · Golf"): it is the same thing, so it counts for the target, not against it.
+	const pointedAt = new Set(Object.values(input).filter((v): v is string => typeof v === 'string'));
+	const own = listed.filter((item) => pointedAt.has(item.id));
+	const others = listed.filter((item) => !pointedAt.has(item.id));
+	const shares = namedShares(text, [
+		title,
+		...own.map((i) => i.label),
+		...others.map((i) => i.label),
+	]);
+	const share = Math.max(...shares.slice(0, 1 + own.length));
+	if (share === 0) return true;
+	return shares.slice(1 + own.length).some((other) => other > share);
 }
 
 /**
@@ -769,7 +779,9 @@ async function extract(ctx: JobContext, row: ItemRow, run: JobRun) {
 		const contexts = await readRecordContexts(ctx, catalog, table);
 		const records = contexts.filter((group) => !group.plain);
 		// What the model could point at: a proposal on one of these must be the one the text names.
-		const listedTitles = records.flatMap((group) => group.items.map((item) => item.label));
+		const listed = records.flatMap((group) =>
+			group.items.map((item) => ({ id: item.id, label: item.label })),
+		);
 		const vocabularies = contexts.filter((group) => group.plain);
 		const sharer = family.find((m) => m.id === row.created_by);
 		const handles = table.toId;
@@ -867,7 +879,7 @@ async function extract(ctx: JobContext, row: ItemRow, run: JobRun) {
 			// item with files cannot be checked against its text.
 			if (
 				files.length === 0 &&
-				(await namesOtherTarget(ctx.actions, proposal.action, input, text, listedTitles))
+				(await namesOtherTarget(ctx.actions, proposal.action, input, text, listed))
 			) {
 				skipped++;
 				skippedUnknown++;
