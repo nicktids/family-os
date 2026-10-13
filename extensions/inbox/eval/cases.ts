@@ -592,6 +592,26 @@ const LIST_CASES: Case[] = [
 	},
 ];
 
+/** What the item states is still proposed when a record it names is not listed. */
+const UNLISTED_RECORD_CASES: Case[] = [
+	{
+		// Found in use: with no pet named Miso, even the vet appointment was dropped.
+		name: 'Keeps the appointment of a pet that is not listed (English)',
+		obligations: [CAR_INSURANCE],
+		text: "Miso's annual check Thu 15 10:30, Riverside Vet Clinic",
+		checks: [
+			has(
+				'calendar.createEvent',
+				'the check on 15 Oct 10:30 at the clinic',
+				(i) =>
+					i.date === '2026-10-15' &&
+					i.startTime === '10:30' &&
+					/riverside/i.test(String(i.location ?? i.title)),
+			),
+		],
+	},
+];
+
 /** Items with nothing to file: a question for the assistant, or plain chatter. */
 const NON_ACTIONABLE_CASES: Case[] = [
 	{
@@ -697,6 +717,7 @@ export const CASES: Case[] = [
 	...REGIONAL_CASES,
 	...RECORD_CASES,
 	...LIST_CASES,
+	...UNLISTED_RECORD_CASES,
 	...CLUB_CASES,
 	...NOTES_CASES,
 ];

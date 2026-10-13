@@ -31,7 +31,7 @@ import { itemChanged, PROCESS_JOB } from './items.ts';
 import { filesOf, ITEM_KIND, type ItemRow, type StoredFile, tables } from './store.ts';
 
 /** Bump when the prompt changes meaningfully; stored on every draft for later comparison. */
-export const PROMPT_VERSION = 'inbox.extract/18';
+export const PROMPT_VERSION = 'inbox.extract/22';
 
 const MODEL_TYPES = new Set([
 	'image/jpeg',
@@ -378,6 +378,25 @@ export function outputJsonSchema(catalog: AiActionInfo[]): Record<string, unknow
 const MAX_CONTEXT_ITEMS = 50;
 const AI_ACTOR = { kind: 'ai', source: 'inbox' } as const;
 
+/**
+ * Puts the items the shared text names first (by the share of their words it says, rare words
+ * counting more), in that order, and the rest after them as they came (newest or soonest first).
+ * The model sees only the first items of a long area, so what the item is about must not be cut.
+ */
+export function rankByMention<T extends { label: string }>(items: readonly T[], text: string): T[] {
+	if (items.length < 2 || !text.trim()) return [...items];
+	const shares = namedShares(
+		text,
+		items.map((item) => item.label),
+	);
+	const named = items
+		.map((item, i) => ({ item, i, share: shares[i] ?? 0 }))
+		.filter((entry) => entry.share > 0)
+		.toSorted((a, b) => b.share - a.share || a.i - b.i);
+	const rest = items.filter((_, i) => (shares[i] ?? 0) <= 0);
+	return [...named.map((entry) => entry.item), ...rest];
+}
+
 export interface RecordContext {
 	kind: string;
 	label: string;
@@ -390,12 +409,14 @@ export interface RecordContext {
  * Records the areas in the catalog share with the model (`ai.context` of an extension). Each is
  * read through its read-only action as the AI actor, so an area that is off for the AI refuses
  * and contributes nothing; no prompt builder reads another extension's tables. Items
- * get short handles (`vehicle:1`) because models copy long ids unreliably.
+ * get short handles (`vehicle:1`) because models copy long ids unreliably. When an area has more
+ * than fit, the ones the shared `text` names come first.
  */
 export async function readRecordContexts(
 	ctx: Pick<JobContext, 'actions' | 'logger'>,
 	catalog: AiActionInfo[],
 	table: HandleTable = createHandleTable(),
+	text = '',
 ): Promise<RecordContext[]> {
 	const areas = new Set(catalog.map((a) => a.id.split('.')[0] as string));
 	const groups: RecordContext[] = [];
@@ -415,7 +436,8 @@ export async function readRecordContexts(
 				if (!isFamosError(error)) ctx.logger.warn({ actionId }, 'AI context failed');
 				continue;
 			}
-			const items = context.items.slice(0, MAX_CONTEXT_ITEMS).map((item) => ({
+			const ranked = context.plain ? context.items : rankByMention(context.items, text);
+			const items = ranked.slice(0, MAX_CONTEXT_ITEMS).map((item) => ({
 				...item,
 				handle: context.plain ? item.label : table.add(context.kind, item.id),
 			}));
@@ -532,13 +554,16 @@ export async function namesOtherTarget(
  * Fields that name members the item itself never names: the model chose them (from a relation,
  * a description or a guess), so a person checks them. A field counts when its value is a member
  * id or a list of member ids; a member counts as named when the item contains any word of their
- * display name. Names are the family's own data, so this works in any language.
+ * display name. A field that holds only the person who shared the item is not checked: "for me"
+ * names them without using their name. Names are the family's own data, so this works in any
+ * language.
  */
 export function unnamedMemberFields(
 	input: Record<string, unknown>,
 	members: readonly { id: string; displayName: string }[],
 	text: string,
 	locale: string,
+	sharerId: string | null = null,
 ): string[] {
 	const byId = new Map(members.map((m) => [m.id, m.displayName]));
 	const words = new Set(
@@ -556,6 +581,7 @@ export function unnamedMemberFields(
 	for (const [key, value] of Object.entries(input)) {
 		const ids = Array.isArray(value) ? value : [value];
 		if (ids.length === 0 || !ids.every((id) => typeof id === 'string' && byId.has(id))) continue;
+		if (sharerId !== null && ids.every((id) => id === sharerId)) continue;
 		if (!(ids as string[]).every(named)) fields.push(key);
 	}
 	return fields;
@@ -776,7 +802,7 @@ async function extract(ctx: JobContext, row: ItemRow, run: JobRun) {
 			...m,
 			handle: table.add('member', m.id),
 		}));
-		const contexts = await readRecordContexts(ctx, catalog, table);
+		const contexts = await readRecordContexts(ctx, catalog, table, text);
 		const records = contexts.filter((group) => !group.plain);
 		// What the model could point at: a proposal on one of these must be the one the text names.
 		const listed = records.flatMap((group) =>
@@ -899,7 +925,13 @@ async function extract(ctx: JobContext, row: ItemRow, run: JobRun) {
 				)
 					uncertain.add(path);
 			}
-			for (const field of unnamedMemberFields(input, family, text, settings.formatLocale))
+			for (const field of unnamedMemberFields(
+				input,
+				family,
+				text,
+				settings.formatLocale,
+				row.created_by,
+			))
 				uncertain.add(field);
 			try {
 				await ctx.actions.invoke(
