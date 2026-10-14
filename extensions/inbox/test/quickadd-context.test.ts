@@ -177,6 +177,27 @@ describe('an event that moved', () => {
 		})) as { actionId: string; mayExist: boolean }[];
 		expect(listed.find((d) => d.actionId === 'calendar.createEvent')?.mayExist).toBe(true);
 	});
+
+	it('marks the real output, a new "Regional gala" a week later, as already there', async () => {
+		// The model's answer to the swim coach's message, written in the message's own case.
+		k.llm.respond({
+			summary: 'Regional gala moved',
+			proposals: [
+				{
+					action: 'calendar.createEvent',
+					input: { title: 'Regional gala', date: '2026-11-14', startTime: '09:00' },
+					dateText: 'Sat 14 Nov',
+					confidence: 0.9,
+				},
+			],
+		});
+		await read('Regional gala moved to Sat 14 Nov 09:00');
+		const listed = (await k.route('core.listDrafts').call({
+			query: { status: 'pending', limit: 10 },
+			actor: admin.actor,
+		})) as { actionId: string; mayExist: boolean }[];
+		expect(listed.find((d) => d.actionId === 'calendar.createEvent')?.mayExist).toBe(true);
+	});
 });
 
 describe('the person who shared the item', () => {

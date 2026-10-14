@@ -30433,6 +30433,8 @@ export interface operations {
                             weekFirstDay: string;
                             /** @description The last day of this week, YYYY-MM-DD */
                             weekLastDay: string;
+                            /** @description The days from a week ago to two weeks ahead, each with its weekday ("Tue 2026-10-13 (today)"). Take weekdays from here; when a weekday and a date disagree, say so and ask. */
+                            days: string[];
                         };
                     } | {
                         /** @enum {string} */

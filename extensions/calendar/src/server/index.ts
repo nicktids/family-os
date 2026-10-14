@@ -431,6 +431,12 @@ export const changeEvent = defineAction({
 	targetTitle: eventTitle,
 	scopeNote: occurrenceScope,
 	resolveNames: resolveOccurrence,
+	// A model sometimes names the event but leaves out what changes; such a draft would change
+	// nothing, so the model is told to give the new values instead.
+	refuseProposal: async (_ctx, { id: _id, label: _label, occurrence: _occurrence, ...change }) =>
+		Object.values(change).some((value) => value !== undefined)
+			? null
+			: 'Nothing would change: give the new values (date, startTime, endTime, location…) in their fields.',
 	undo: ({ event, before, split }) =>
 		split
 			? {
