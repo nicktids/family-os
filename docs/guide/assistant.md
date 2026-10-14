@@ -12,7 +12,9 @@ People with the permission **Ask the assistant** can use it. Admins, members and
 
 When you ask it to change or remove something, it must name the item the way you did. If nothing on the calendar or the lists matches your words, it tells you it is not there instead of changing a similar item. You can also ask it to move a single date of a repeating event ("move this Sunday's planning to 18:00"): that date becomes its own event and the repeating series skips it. **Undo** puts it back.
 
-It reads weekdays from a calendar of the days around today in the family's time zone instead of working them out. When a weekday and a date you give do not match ("Wednesday 20 October" when the 20th is a Tuesday), it says so and asks which one you mean.
+It reads weekdays from a calendar of the days around today in the family's time zone instead of working them out. When a weekday and a date you give do not match ("Wednesday 20 October" when the 20th is a Tuesday), FamilyOS itself checks your message for this before the assistant answers (in every installed language, with numeric dates read in your region's order), so the assistant says so and asks which one you mean.
+
+An overview ("give me an overview of this week", "show me the open tasks") covers the whole family. The assistant narrows to one person only when you ask about whose things they are: "my calendar", "what do I have", "am I free" or "Noah's tasks".
 
 Examples to try:
 
@@ -31,9 +33,11 @@ Conversations are private: each person sees only their own.
 
 ## Suggestions
 
-Suggestions appear as the same cards as in Quick add, right under the answer. People who may approve can approve, edit or reject them there. Others, such as a supervised member, see **Waiting for approval**; an adult decides in Quick add, and the assistant says so. A card always shows the real name of the item it changes. When [auto-approval](auto-approval.md) is on for the kind of change, the assistant says it will be added automatically in a moment. An approved suggestion can be taken back with **Undo**.
+Suggestions appear as the same cards as in Quick add, right under the answer. People who may approve can approve, edit or reject them there. They also wait in Quick add under **Waiting for you** (**From the assistant**), so they are not lost when you leave the conversation. Others, such as a supervised member, see **Waiting for approval**; an adult decides in Quick add, and the assistant says so. A card always shows the real name of the item it changes. When [auto-approval](auto-approval.md) is on for the kind of change, the assistant says it will be added automatically in a moment. An approved suggestion can be taken back with **Undo**.
 
-Under an answer that made suggestions, the assistant always adds a fixed line for each one, such as "Suggested: Add shopping items: Milk, Oat milk". It is written by the app from the suggestion itself, so it is right even if the wording above it is not. To add something to a particular shopping list, name the list ("add picture wire to the Hardware store list"); without a name, the first list is used. If the name matches none of your lists, the assistant says so and names the lists you have.
+Ask "was it approved?" and the assistant looks up the suggestions it made in this conversation, with what became of each and who decided it ("approved by Sofia"). Suggestions made elsewhere, in Quick add, another conversation or a connected app, are not its own and it does not report them.
+
+Under an answer that made suggestions, the assistant always adds a fixed line for each one, such as "Suggested, not added yet: Add shopping items: Milk, Oat milk" (or "Added automatically: …" when auto-approval adds it). It is written by the app from the suggestion itself, so it is right even if the wording above it is not, and it is there even when the assistant ran out of steps before writing an answer. To add something to a particular shopping list, name the list ("add picture wire to the Hardware store list"); without a name, the first list is used. If the name matches none of your lists, the assistant says so and names the lists you have.
 
 A follow-up such as "yes, move it to 18:00" refers to what the conversation was just about; the assistant remembers the events and items it looked at earlier in the same conversation.
 

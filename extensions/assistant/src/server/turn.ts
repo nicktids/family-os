@@ -8,7 +8,7 @@ import {
 	type LlmChatMessage,
 	type MemberId,
 } from '@famos/sdk';
-import { todayIn, zoned } from '@famos/time';
+import { dateWords, numericDateOrder, todayIn, zoned } from '@famos/time';
 import { z } from 'zod';
 import {
 	CHAT_FEATURE,
@@ -18,7 +18,7 @@ import {
 	TURN_JOB,
 } from '../contract/index.ts';
 import { formatWeekday } from './format.ts';
-import { systemPrompt } from './prompt.ts';
+import { systemPrompt, weekdayNotes } from './prompt.ts';
 import { createHandleScrubber, scrubHandles } from './scrub.ts';
 import { tables } from './store.ts';
 import {
@@ -82,7 +82,7 @@ const parseHandles = (json: string | null): RememberedHandles => {
 };
 
 /**
- * The fixed lines under an answer that made suggestions, one per suggestion ("Suggested: Add shopping
+ * The fixed lines under an answer that made suggestions, one per suggestion ("Suggested, not added yet: Add shopping
  * items: Milk, Oat milk"). Built from the suggestions, not from the
  * model's words, so the answer can never claim something else.
  */
@@ -185,6 +185,8 @@ export const turnJob = defineJob({
 		const actor: Actor = {
 			kind: 'ai',
 			source: 'assistant',
+			// The suggestions of this conversation are its own; the person's others are not.
+			sourceId: threadId,
 			onBehalfOf: member.id as MemberId,
 			roleId: member.roleId,
 			// Results of local-only areas may reach the model only if it runs on the family's network.
@@ -248,6 +250,14 @@ export const turnJob = defineJob({
 		const settings = await ctx.family.settings();
 		const now = ctx.clock.now();
 		const today = todayIn(settings.timeZone, now);
+		// A weekday that does not fit its date in what the person just wrote is pointed out.
+		const asked = kept.findLast((m) => m.role === 'user')?.content ?? '';
+		const notes = weekdayNotes(
+			asked,
+			today,
+			dateWords((key) => ctx.vocabulary(key)),
+			numericDateOrder(settings.formatLocale),
+		);
 		const calls: RecordedCall[] = [];
 		const proposals: Proposal[] = [];
 		const inject = {
@@ -294,6 +304,7 @@ export const turnJob = defineJob({
 						.filter(([, label]) => label !== '')
 						.slice(-MAX_RECORDS_IN_PROMPT)
 						.map(([handle, label]) => ({ handle, label })),
+					notes,
 				}),
 				messages,
 				tools: chatTools(tools, {
@@ -311,6 +322,9 @@ export const turnJob = defineJob({
 						ctx.logger.warn({ actionId, code, inputKeys }, 'assistant tool call failed'),
 				}),
 				maxSteps: MAX_STEPS,
+				// The same question should get the same lookups and suggestions: at the provider's
+				// default the model picks different tools (or none) from one run to the next.
+				temperature: 0,
 				toolsClosed: () => toolsClosed(calls),
 				timeoutMs: CHAT_TIMEOUT_MS,
 				memberId,
@@ -322,17 +336,19 @@ export const turnJob = defineJob({
 			// suggestions themselves.
 			const locale = member.locale ?? settings.locale;
 			const stated = proposalLines(proposals, (key, params) => ctx.translate(locale, key, params));
-			if (result.text && stated !== '') emit(`\n\n${stated}`);
-			// The step limit can end the loop on a tool call: no answer text, which is a failure
-			// (the drafts it made still stand and are listed).
+			// The step limit can end the loop on a tool call, with no answer text. If the turn made
+			// suggestions, the lines naming them are the answer (asking again would suggest them
+			// twice); with nothing at all it is a failure.
+			const answer = result.text ? scrubHandles(result.text, nameOf) : '';
+			if (stated !== '') emit(answer === '' ? stated : `\n\n${stated}`);
 			await finish(
-				result.text
-					? {
+				answer === '' && stated === ''
+					? { status: 'failed', errorCode: 'no_answer', calls }
+					: {
 							status: 'done',
-							content: `${scrubHandles(result.text, nameOf)}${stated === '' ? '' : `\n\n${stated}`}`,
+							content: [answer, stated].filter((part) => part !== '').join('\n\n'),
 							calls,
-						}
-					: { status: 'failed', errorCode: 'no_answer', calls },
+						},
 			);
 			const total = await db
 				.selectFrom('assistant_messages')

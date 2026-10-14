@@ -199,6 +199,8 @@ export const DraftSchema = z.object({
 		.nullable(),
 	/** The action it proposed before a reviewer chose its alternative; null when it never changed. */
 	replacedFrom: z.string().nullable(),
+	/** Whether the member reading it may decide it (approve or reject it on its merits). */
+	canDecide: z.boolean(),
 });
 
 const toMember = (row: MemberRow): Member => ({
@@ -233,6 +235,7 @@ const toDraft = (
 	mayExist: boolean | 'some' = false,
 	titleKey: string | null = null,
 	instead: DraftAlternative | null = null,
+	canDecide = false,
 ): z.infer<typeof DraftSchema> => ({
 	id: row.id,
 	actionId: row.action_id,
@@ -267,6 +270,7 @@ const toDraft = (
 	},
 	replacedFrom:
 		row.replaced === null ? null : (JSON.parse(row.replaced) as { actionId: string }).actionId,
+	canDecide,
 });
 
 const members = (db: DbExecutor) => db.withTables<CoreTables>();
@@ -1123,7 +1127,7 @@ export function createCoreExtension(deps: CoreExtensionDeps) {
 			const shown = rows
 				.map((row): DraftRow => (passed(row) ? { ...row, status: 'expired' } : row))
 				.filter((row) => !query.status || row.status === query.status);
-			return Promise.all(shown.map(view));
+			return Promise.all(shown.map((row) => view(row, actor)));
 		},
 	});
 
@@ -1131,7 +1135,8 @@ export function createCoreExtension(deps: CoreExtensionDeps) {
 		method: 'get',
 		path: '/drafts/waiting',
 		operationId: 'core.countWaitingDrafts',
-		summary: 'How many suggestions wait for a decision (a count only)',
+		summary:
+			'How many suggestions wait for a decision (a count only): what Quick add shows to decide',
 		requires: CORE_CAPABILITIES.draftsWaiting.id,
 		response: z.object({ count: z.number().int() }),
 		async handle(ctx, { actor }) {
@@ -1140,7 +1145,8 @@ export function createCoreExtension(deps: CoreExtensionDeps) {
 				.withTables<CoreTables>()
 				.selectFrom('core_drafts')
 				.selectAll()
-				.where('status', '=', 'pending')
+				// A suggestion whose applying failed still waits for someone to try it again.
+				.where('status', 'in', [...WAITING_STATUSES])
 				.where((eb) =>
 					actor.kind === 'member'
 						? eb.or([eb('for_member', 'is', null), eb('for_member', '=', actor.memberId)])
@@ -1238,9 +1244,11 @@ export function createCoreExtension(deps: CoreExtensionDeps) {
 	});
 
 	/**
-	 * What became of the suggestions the signed-in member made, or an agent made for them (the
-	 * assistant, an MCP client). Agents read it to answer "was it approved?" instead of guessing.
-	 * Only the member's own suggestions are listed, and one addressed to someone else never is.
+	 * What became of suggestions, so an agent answers "was it approved?" instead of guessing. An
+	 * agent working in a conversation (the assistant in one thread, an MCP client with its app key)
+	 * sees only the suggestions made there: the person's other suggestions, from Quick add or
+	 * another app, are not its doing. A member asking directly sees all of their own. Only the
+	 * person's own suggestions are listed, and one addressed to someone else never is.
 	 */
 	const mySuggestions = defineAction({
 		id: 'core.mySuggestions',
@@ -1260,13 +1268,17 @@ export function createCoreExtension(deps: CoreExtensionDeps) {
 					/** When it was suggested and, once decided, when; ISO 8601 UTC. */
 					suggestedAt: z.string(),
 					decidedAt: z.string().optional(),
+					/** The member who decided it (approved, rejected or took it back). */
+					decidedBy: z.string().optional(),
+					/** Approved by the household's auto-approval setting, not by a person deciding it. */
+					automatic: z.literal(true).optional(),
 				}),
 			),
 		}),
 		readOnly: true,
 		ai: {
 			description:
-				"Lists the person's recent suggestions (the changes they or you proposed for them) with what became of each: waiting, approved, rejected (withdrawn when the person took it back), undone, expired or failed. Use it when the person asks whether something was approved or added, or what is still waiting.",
+				"Lists the suggestions made in this conversation (the changes you proposed here for the person; for a connected app, the ones made through its app key), newest first, with what became of each: waiting, approved, rejected (withdrawn when the person took it back), undone, expired or failed, and who decided it (decidedBy; automatic when the household's auto-approval approved it). Suggestions made elsewhere (Quick add, other conversations or apps) are not listed: never present them as made here. Use it when the person asks whether something was approved or added, or what is still waiting.",
 		},
 		async run(uow, { limit }) {
 			const owner =
@@ -1288,12 +1300,23 @@ export function createCoreExtension(deps: CoreExtensionDeps) {
 			const actions = deps.registry().actions;
 			const iso = (at: number) => new Date(at).toISOString();
 			const ctx = { db: uow.db, family: uow.family, translate: uow.translate };
+			const actor = uow.actor;
+			// An agent in a conversation: what was suggested there (an MCP draft also names its app
+			// key as its source).
+			const here =
+				actor.kind === 'ai' && actor.sourceId !== undefined
+					? (row: DraftRow, by: Actor) =>
+							(by.kind === 'ai' && by.source === actor.source && by.sourceId === actor.sourceId) ||
+							(row.source_kind === actor.source && row.source_id === actor.sourceId)
+					: () => true;
 			const mine = rows
 				.filter((row) => {
 					const by = JSON.parse(row.proposed_by) as Actor;
-					return by.kind === 'member'
-						? by.memberId === owner
-						: by.kind === 'ai' && by.onBehalfOf === owner;
+					const theirs =
+						by.kind === 'member'
+							? by.memberId === owner
+							: by.kind === 'ai' && by.onBehalfOf === owner;
+					return theirs && here(row, by);
 				})
 				.slice(0, limit);
 			// A draft stored before drafts carried the real title of what they change names its
@@ -1347,6 +1370,8 @@ export function createCoreExtension(deps: CoreExtensionDeps) {
 						...(reason !== null && { reason }),
 						suggestedAt: iso(row.created_at),
 						...(row.decided_at !== null && { decidedAt: iso(row.decided_at) }),
+						...(row.decided_by !== null && { decidedBy: row.decided_by }),
+						...(row.auto_approved === 1 && { automatic: true as const }),
 					};
 				}),
 			);
@@ -1366,13 +1391,14 @@ export function createCoreExtension(deps: CoreExtensionDeps) {
 	});
 
 	const DraftParams = z.object({ draftId: idSchema('draft') });
-	const view = async (row: DraftRow) =>
+	const view = async (row: DraftRow, reader: Actor) =>
 		toDraft(
 			row,
 			deps.runner().undoStep(row) !== null,
 			await deps.runner().mayExist(row),
 			deps.registry().actions.get(row.action_id)?.draftTitle ?? null,
 			await deps.runner().alternative(row),
+			deps.runner().mayDecide(row, reader),
 		);
 
 	const approve = defineRoute({
@@ -1386,7 +1412,7 @@ export function createCoreExtension(deps: CoreExtensionDeps) {
 		body: z.object({ input: z.unknown().optional() }),
 		response: DraftSchema,
 		async handle(_ctx, { params, body, actor }) {
-			return view(await deps.runner().approveDraft(params.draftId, actor, body.input));
+			return view(await deps.runner().approveDraft(params.draftId, actor, body.input), actor);
 		},
 	});
 
@@ -1399,7 +1425,7 @@ export function createCoreExtension(deps: CoreExtensionDeps) {
 		params: DraftParams,
 		response: DraftSchema,
 		async handle(_ctx, { params, actor }) {
-			return view(await deps.runner().rejectDraft(params.draftId, actor));
+			return view(await deps.runner().rejectDraft(params.draftId, actor), actor);
 		},
 	});
 
@@ -1412,7 +1438,7 @@ export function createCoreExtension(deps: CoreExtensionDeps) {
 		params: DraftParams,
 		response: DraftSchema,
 		async handle(_ctx, { params, actor }) {
-			return view(await deps.runner().undoDraft(params.draftId, actor));
+			return view(await deps.runner().undoDraft(params.draftId, actor), actor);
 		},
 	});
 
@@ -1426,7 +1452,7 @@ export function createCoreExtension(deps: CoreExtensionDeps) {
 		params: DraftParams,
 		response: DraftSchema,
 		async handle(_ctx, { params, actor }) {
-			return view(await deps.runner().replaceDraft(params.draftId, actor));
+			return view(await deps.runner().replaceDraft(params.draftId, actor), actor);
 		},
 	});
 

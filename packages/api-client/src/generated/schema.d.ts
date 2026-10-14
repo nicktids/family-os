@@ -1266,7 +1266,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** How many suggestions wait for a decision (a count only) */
+        /** How many suggestions wait for a decision (a count only): what Quick add shows to decide */
         get: operations["core.countWaitingDrafts"];
         put?: never;
         post?: never;
@@ -16541,6 +16541,7 @@ export interface operations {
                             };
                         } | null;
                         replacedFrom: string | null;
+                        canDecide: boolean;
                     }[];
                 };
             };
@@ -16660,7 +16661,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description How many suggestions wait for a decision (a count only) */
+            /** @description How many suggestions wait for a decision (a count only): what Quick add shows to decide */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -16835,6 +16836,7 @@ export interface operations {
                             };
                         } | null;
                         replacedFrom: string | null;
+                        canDecide: boolean;
                     };
                 };
             };
@@ -16996,6 +16998,7 @@ export interface operations {
                             };
                         } | null;
                         replacedFrom: string | null;
+                        canDecide: boolean;
                     };
                 };
             };
@@ -17157,6 +17160,7 @@ export interface operations {
                             };
                         } | null;
                         replacedFrom: string | null;
+                        canDecide: boolean;
                     };
                 };
             };
@@ -17318,6 +17322,7 @@ export interface operations {
                             };
                         } | null;
                         replacedFrom: string | null;
+                        canDecide: boolean;
                     };
                 };
             };
@@ -26064,7 +26069,7 @@ export interface operations {
                     to?: string;
                     /** @description Only events whose title or place contains this text or a form of its words ("swimming" also finds "Swim training"), e.g. "swimming". Without `from` and `to` it searches from today on */
                     text?: string;
-                    /** @description Only what involves these people, plus events for the whole family. Use it for "my ..." and "<name>'s ..." questions */
+                    /** @description Leave it out (the default) for the whole family calendar: overviews and "what is on" questions, also when the person says "give me" or "show me" (that is who gets the answer, not whose events). Only for a question about specific people's own events ("my calendar", "what do I have", "am I free", "Noah's week"): what involves these people, plus events for the whole family */
                     members?: string[];
                     /** @description Only events with this existing family tag; leave out unless a tag was named */
                     tag?: string;
@@ -30495,6 +30500,9 @@ export interface operations {
                                 reason?: "withdrawn" | "gone" | "settled";
                                 suggestedAt: string;
                                 decidedAt?: string;
+                                decidedBy?: string;
+                                /** @enum {boolean} */
+                                automatic?: true;
                             }[];
                         };
                     } | {
@@ -41887,7 +41895,7 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": {
-                    /** @description Only tasks of this member (their handle) */
+                    /** @description Leave it out (the default) for all open tasks of the family, also when the person says "give me" or "show me the open tasks" (that is who gets the answer, not whose tasks). Only for a question about one person's own tasks ("what do I still have to do", "Sam's tasks"): their handle */
                     assignee?: string;
                 };
             };
