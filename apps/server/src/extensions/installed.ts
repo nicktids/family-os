@@ -1,14 +1,17 @@
 import {
 	type ExtensionPackage,
 	type ExtensionPackagesPort,
+	type ExtensionProblem,
 	type ExtensionState,
 	emptyExtensionState,
 	type RefusedExtension,
 	readExtensionState,
+	type StagedPackage,
 	writeExtensionState,
 } from '@famos/core';
 import { schemaState } from '@famos/db';
 import { type DbExecutor, type ExtensionDefinition, FamosError, tablePrefixOf } from '@famos/sdk';
+import { compareVersions, type ExtensionStore } from '../packages/store.ts';
 import { type Available, type LoadReport, summary } from './load.ts';
 import { chooseInstalled, migrationProblem } from './state.ts';
 import type { WebPackage } from './web.ts';
@@ -25,6 +28,11 @@ export interface InstalledExtensions {
 	installed: string[];
 	/** The packages that can be installed. */
 	packages: ExtensionPackagesPort;
+	/**
+	 * The stored copy chosen for each installed extension that runs from the store (id to
+	 * digest): what the store keeps when it removes old copies.
+	 */
+	storedInUse: Map<string, string>;
 	report: LoadReport;
 }
 
@@ -37,6 +45,7 @@ export interface InstalledExtensions {
 export async function loadInstalled(
 	db: DbExecutor,
 	available: Available,
+	options: { store?: ExtensionStore } = {},
 ): Promise<InstalledExtensions> {
 	const scopes = await schemaState(db);
 	// Core's table holds the state; before core's first migration there is none.
@@ -49,7 +58,7 @@ export async function loadInstalled(
 		fromSource: available.from === 'source',
 	});
 	const byId = new Map(available.extensions.map((ext) => [ext.id, ext]));
-	const unreadable = new Map(available.unreadable.map((u) => [u.id, u.reason]));
+	const unreadable = new Map(available.unreadable.map((u) => [u.id, u] as const));
 	const extensions: ExtensionDefinition[] = [];
 	const web: WebPackage[] = [];
 	const refused: RefusedExtension[] = [];
@@ -59,13 +68,20 @@ export async function loadInstalled(
 			refused.push({
 				id,
 				version: null,
-				reason: unreadable.get(id) ?? 'This server has no package of it',
+				reason: unreadable.get(id)?.reason ?? 'This server has no package of it',
+				code: unreadable.get(id)?.code ?? 'no_package',
 			});
 			continue;
 		}
 		const failed = state?.failed.find((f) => f.id === id && f.version === ext.version);
 		if (failed && !ext.always) {
-			refused.push({ id, version: ext.version, reason: failed.reason });
+			refused.push({
+				id,
+				version: ext.version,
+				reason: failed.reason,
+				code: failed.code ?? 'start_failed',
+				...(failed.params && { params: failed.params }),
+			});
 			continue;
 		}
 		let definition: ExtensionDefinition;
@@ -73,13 +89,13 @@ export async function loadInstalled(
 			definition = await ext.load();
 		} catch (error) {
 			if (ext.always) throw error;
-			refused.push({ id, version: ext.version, reason: messageOf(error) });
+			refused.push({ id, version: ext.version, reason: messageOf(error), code: 'load_failed' });
 			continue;
 		}
 		const problem = migrationProblem(scopes[id], definition.migrations);
 		if (problem) {
-			if (ext.always) throw new Error(`The extension ${id} cannot run here: ${problem}`);
-			refused.push({ id, version: ext.version, reason: problem });
+			if (ext.always) throw new Error(`The extension ${id} cannot run here: ${problem.reason}`);
+			refused.push({ id, version: ext.version, ...problem });
 			continue;
 		}
 		extensions.push(definition);
@@ -92,7 +108,12 @@ export async function loadInstalled(
 		refused,
 		refusable: available.extensions.filter((ext) => !ext.always).map((ext) => ext.id),
 		installed,
-		packages: shippedPackages(available),
+		packages: packagesPort(available, options.store),
+		storedInUse: new Map(
+			available.extensions.flatMap((ext) =>
+				ext.stored && installed.includes(ext.id) ? [[ext.id, ext.stored.digest] as const] : [],
+			),
+		),
 		report: {
 			from: available.from,
 			dir: available.dir,
@@ -102,22 +123,77 @@ export async function loadInstalled(
 	};
 }
 
-/** The packages shipped with the app: already in place, so installing one needs no file step. */
-function shippedPackages(available: Available): ExtensionPackagesPort {
-	const list: ExtensionPackage[] = available.extensions.map((ext) => ({
-		id: ext.id,
-		version: ext.version,
-		always: ext.always,
-		manifest: ext.manifest,
-		labels: ext.labels,
-	}));
+/**
+ * The packages that can be installed: those shipped with the app (already in place, so
+ * installing one needs no file step) and the store's, plus any placed since this start. Without a
+ * store nothing can be installed from a file.
+ */
+function packagesPort(
+	available: Available,
+	store: ExtensionStore | undefined,
+): ExtensionPackagesPort {
+	type Known = ExtensionPackage & { stored: boolean };
+	const byId = new Map<string, Known>(
+		available.extensions.map((ext) => [
+			ext.id,
+			{
+				id: ext.id,
+				version: ext.version,
+				always: ext.always,
+				manifest: ext.manifest,
+				labels: ext.labels,
+				stored: ext.stored !== undefined,
+			},
+		]),
+	);
+	const plain = ({ stored: _, ...pkg }: Known): ExtensionPackage => pkg;
+	/** An older version than this server has would never run (the highest one does): refused. */
+	const assertNotOlder = (staged: StagedPackage) => {
+		const have = byId.get(staged.id);
+		if (have && compareVersions(staged.version, have.version) < 0)
+			throw new FamosError(
+				'conflict',
+				`This server has ${staged.id} ${have.version}; the package is the older ${staged.version}`,
+				{ reason: 'older', extensionId: staged.id, version: have.version },
+			);
+	};
 	return {
-		list: () => list,
+		list: () => [...byId.values()].map(plain),
 		async place(source) {
-			const found = list.find((p) => p.id === source.id);
-			if (!found) throw new FamosError('not_found', `No extension "${source.id}" to install`);
-			return found;
+			if ('id' in source) {
+				const found = byId.get(source.id);
+				if (!found) throw new FamosError('not_found', `No extension "${source.id}" to install`);
+				return plain(found);
+			}
+			if (!store) throw new FamosError('not_found', 'This server cannot install from a file');
+			const staged = await store.staged(source.staged);
+			if (staged) {
+				assertNotOlder(staged);
+				const have = byId.get(staged.id);
+				// The same version as the shipped one: the shipped copy runs, nothing to place.
+				if (have && !have.stored && compareVersions(staged.version, have.version) === 0)
+					return plain(have);
+			}
+			const placed = await store.place(source.staged);
+			const pkg: Known = {
+				id: placed.id,
+				version: placed.version,
+				always: byId.get(placed.id)?.always ?? false,
+				manifest: placed.manifest,
+				labels: placed.labels,
+				stored: true,
+			};
+			byId.set(placed.id, pkg);
+			return plain(pkg);
 		},
+		...(store && {
+			async stage(archive: Uint8Array) {
+				const staged = await store.stage(archive);
+				assertNotOlder(staged);
+				return staged;
+			},
+			staged: (digest: string) => store.staged(digest),
+		}),
 	};
 }
 
@@ -153,7 +229,13 @@ export async function recordStart(
 /** Notes that an extension's migrations or start failed: that version is not loaded again. */
 export async function recordFailure(
 	db: DbExecutor,
-	failure: { id: string; version: string; reason: string },
+	failure: {
+		id: string;
+		version: string;
+		reason: string;
+		code: ExtensionProblem;
+		params?: Record<string, string>;
+	},
 	now: number,
 ): Promise<void> {
 	const state = (await readExtensionState(db)) ?? emptyExtensionState();

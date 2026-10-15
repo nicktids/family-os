@@ -2,12 +2,17 @@ import { describe, expect, it } from 'vitest';
 import {
 	descriptionOf,
 	type Entry,
+	fileProblem,
 	nameOf,
 	neededBy,
+	problemOf,
 	reachOf,
 	restartNeeded,
+	type Staged,
 	sections,
+	stagedEntry,
 	staysInside,
+	updateOf,
 } from './entries.js';
 
 function entry(id: string, more: Partial<Entry> = {}): Entry {
@@ -22,6 +27,9 @@ function entry(id: string, more: Partial<Entry> = {}): Entry {
 		optional: [],
 		reaches: { hosts: [], userUrls: false, local: false, calls: [], capabilities: [] },
 		labels: { en: { name: id.toUpperCase(), description: `About ${id}` } },
+		nextVersion: null,
+		reasonCode: null,
+		reasonParams: {},
 		...more,
 	};
 }
@@ -137,5 +145,117 @@ describe('uninstalling and restarting', () => {
 		expect(restartNeeded([entry('a'), entry('b', { status: 'failed' })])).toBe(false);
 		expect(restartNeeded([entry('a', { status: 'pending_install' })])).toBe(true);
 		expect(restartNeeded([entry('a', { status: 'pending_uninstall' })])).toBe(true);
+		// A newer version installed from a file loads at the next start too.
+		expect(restartNeeded([entry('a', { nextVersion: '0.2.0' })])).toBe(true);
+	});
+});
+
+describe('a package from a file', () => {
+	const staged: Staged = {
+		digest: 'a'.repeat(32),
+		id: 'garden',
+		version: '1.2.0',
+		current: null,
+		labels: { en: { name: 'Garden', description: 'Watering and seeds' } },
+		dependsOn: ['records'],
+		optional: ['calendar'],
+		reaches: {
+			hosts: ['seeds.example.org'],
+			userUrls: false,
+			local: false,
+			calls: [],
+			capabilities: ['garden.view'],
+		},
+		signer: { keyId: '0123456789abcdef', kind: 'official' },
+	};
+
+	it('shows like an extension that can be installed, with what installs alongside', () => {
+		const shown = stagedEntry(staged);
+		expect(shown).toMatchObject({ id: 'garden', version: '1.2.0', status: 'available' });
+		expect(nameOf(shown, { language: 'tr' })).toBe('Garden');
+		const list = [entry('records', { status: 'available' }), entry('calendar')];
+		expect(reachOf(shown, list)).toMatchObject({
+			hosts: ['seeds.example.org'],
+			capabilities: 1,
+			alongside: ['records'],
+			worksWith: ['calendar'],
+		});
+	});
+
+	it('says whether it updates one the server has', () => {
+		expect(updateOf(staged)).toBeNull();
+		expect(updateOf({ ...staged, current: '1.0.0' })).toEqual({ from: '1.0.0', to: '1.2.0' });
+		expect(updateOf({ ...staged, current: '1.2.0' })).toBeNull();
+	});
+
+	it('explains each refusal from its codes, never the server’s words', () => {
+		const bad = (details: Record<string, string>) => ({ status: 400, details });
+		expect(fileProblem({ status: 413 })).toEqual({
+			headline: { key: 'extensions_file_too_large' },
+		});
+		expect(fileProblem(bad({ reason: 'unsigned', code: 'untrusted_key', keyId: 'ab12' }))).toEqual({
+			headline: { key: 'extensions_file_unsigned' },
+			detail: { key: 'extensions_file_untrusted_key', values: { keyId: 'ab12' } },
+		});
+		expect(
+			fileProblem(bad({ reason: 'too_large', code: 'too_large', limitMb: '20' })).detail,
+		).toEqual({ key: 'extensions_file_limit', values: { limitMb: '20' } });
+		expect(
+			fileProblem(bad({ reason: 'incompatible', code: 'sdk', needs: '^0.9.0', has: '0.4.0' })),
+		).toEqual({
+			headline: { key: 'extensions_file_incompatible' },
+			detail: { key: 'extensions_file_sdk', values: { needs: '^0.9.0', has: '0.4.0' } },
+		});
+		expect(
+			fileProblem(bad({ reason: 'invalid', code: 'file_mismatch', path: 'server/index.mjs' }))
+				.detail,
+		).toEqual({ key: 'extensions_file_changed', values: { path: 'server/index.mjs' } });
+		// A code without a sentence of its own: the headline alone.
+		expect(fileProblem(bad({ reason: 'invalid', code: 'not_gzip' }))).toEqual({
+			headline: { key: 'extensions_file_invalid' },
+		});
+		expect(fileProblem({ status: 400 })).toEqual({ headline: { key: 'extensions_file_invalid' } });
+		expect(fileProblem({ status: 409, details: { reason: 'older', version: '2.0.0' } })).toEqual({
+			headline: { key: 'extensions_file_older', values: { version: '2.0.0' } },
+		});
+		expect(fileProblem({ status: 500 })).toEqual({ headline: { key: 'error_generic' } });
+	});
+});
+
+describe('why an installed extension is left out', () => {
+	const nameOfId = (id: string) => id.toUpperCase();
+
+	it('says it by the reason’s code, naming another extension by its name', () => {
+		expect(
+			problemOf(
+				entry('pets', {
+					status: 'refused',
+					reason: 'It needs "records", which was refused',
+					reasonCode: 'dependency_refused',
+					reasonParams: { extensionId: 'records' },
+				}),
+				nameOfId,
+			),
+		).toEqual({
+			key: 'extensions_problem_dependency_refused',
+			values: { extensionId: 'records', name: 'RECORDS' },
+		});
+		expect(
+			problemOf(
+				entry('pets', {
+					status: 'failed',
+					reasonCode: 'sdk',
+					reasonParams: { needs: '^0.9.0', has: '0.4.0' },
+				}),
+				nameOfId,
+			),
+		).toEqual({ key: 'extensions_problem_sdk', values: { needs: '^0.9.0', has: '0.4.0' } });
+	});
+
+	it('says it generally without a code, and nothing for one that runs', () => {
+		expect(
+			problemOf(entry('pets', { status: 'failed', reason: 'disk says no' }), nameOfId),
+		).toEqual({ key: 'extensions_problem_unknown' });
+		expect(problemOf(entry('pets'), nameOfId)).toBeNull();
 	});
 });

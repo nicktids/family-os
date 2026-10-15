@@ -4,9 +4,11 @@ import { join } from 'node:path';
 import {
 	defineAction,
 	defineCapability,
+	defineExtension,
 	type ExtensionDefinition,
 	FamosError,
 	parseManifest,
+	SDK_VERSION,
 	systemActor,
 } from '@famos/sdk';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -16,6 +18,7 @@ import {
 	type ExtensionPackage,
 	type ExtensionPackagesPort,
 	readExtensionState,
+	type StagedPackage,
 	writeExtensionState,
 } from '../src/extension-state.ts';
 import { isExtensionRefusedError } from '../src/registry.ts';
@@ -35,9 +38,13 @@ async function kernel(options: Parameters<typeof createTestKernel>[0] = {}) {
 const ext = (id: string, more: Partial<Parameters<typeof defineTestExtension>[0]> = {}) =>
 	defineTestExtension({ id, ...more });
 
-/** A package port over these extensions; `always` ones cannot be uninstalled. */
+/**
+ * A package port over these extensions; `always` ones cannot be uninstalled. Uploads are the
+ * given staged packages, staged by their digest's first byte.
+ */
 function packages(
 	list: { ext: ExtensionDefinition; always?: boolean }[],
+	uploads: StagedPackage[] = [],
 ): ExtensionPackagesPort & { placed: string[] } {
 	const placed: string[] = [];
 	const all: ExtensionPackage[] = list.map(({ ext, always }) => ({
@@ -47,17 +54,41 @@ function packages(
 		manifest: parseManifest(ext.manifest),
 		labels: { en: { name: ext.id, description: `The ${ext.id}` } },
 	}));
+	const staged = new Map<string, StagedPackage>();
 	return {
 		placed,
 		list: () => all,
-		async place({ id }) {
-			const found = all.find((p) => p.id === id);
-			if (!found) throw new FamosError('not_found', id);
-			placed.push(id);
+		async place(source) {
+			if ('staged' in source) {
+				const found = staged.get(source.staged);
+				if (!found) throw new FamosError('not_found', source.staged);
+				placed.push(`${found.id}@${found.version}`);
+				return { ...found, always: false };
+			}
+			const found = all.find((p) => p.id === source.id);
+			if (!found) throw new FamosError('not_found', source.id);
+			placed.push(source.id);
 			return found;
 		},
+		async stage(archive) {
+			const found = uploads.find((u) => u.digest.startsWith(String(archive[0])));
+			if (!found) throw new FamosError('bad_request', 'The package is not signed');
+			staged.set(found.digest, found);
+			return found;
+		},
+		staged: async (digest) => staged.get(digest),
 	};
 }
+
+/** An upload as a port stages it: checked, with its signer. */
+const upload = (def: ExtensionDefinition, digest: string, version = '0.0.0'): StagedPackage => ({
+	digest,
+	id: def.id,
+	version,
+	manifest: parseManifest({ ...def.manifest, version }),
+	labels: { en: { name: def.id, description: `The ${def.id}` } },
+	signer: { keyId: '0123456789abcdef', kind: 'official' },
+});
 
 describe('a kernel with extensions it may refuse', () => {
 	it('starts without a refused extension and its dependents, and says why', async () => {
@@ -70,8 +101,19 @@ describe('a kernel with extensions it may refuse', () => {
 		});
 		expect(k.registry.extensions.map((e) => e.id)).toEqual(['core', 'fine']);
 		expect(k.refused).toEqual([
-			{ id: 'broken', version: '0.0.0', reason: expect.stringContaining('core.noSuchAction') },
-			{ id: 'leaning', version: '0.0.0', reason: 'It needs "broken", which was refused' },
+			{
+				id: 'broken',
+				version: '0.0.0',
+				reason: expect.stringContaining('core.noSuchAction'),
+				code: 'invalid',
+			},
+			{
+				id: 'leaning',
+				version: '0.0.0',
+				reason: 'It needs "broken", which was refused',
+				code: 'dependency_refused',
+				params: { extensionId: 'broken' },
+			},
 		]);
 	});
 
@@ -109,7 +151,30 @@ describe('a kernel with extensions it may refuse', () => {
 			refusable: ['stray'],
 		});
 		expect(k.refused).toEqual([
-			{ id: 'stray', version: '0.0.0', reason: expect.stringContaining('nowhere.view') },
+			{
+				id: 'stray',
+				version: '0.0.0',
+				reason: expect.stringContaining('nowhere.view'),
+				code: 'invalid',
+			},
+		]);
+	});
+
+	it('gives a refusal a code and the values a page names, beside the words for the log', async () => {
+		const future = defineExtension({ manifest: { id: 'future', version: '1.0.0', sdk: '^9.0.0' } });
+		const lonely = ext('lonely', { dependsOn: ['nowhere'] });
+		const k = await kernel({ extensions: [future, lonely], refusable: ['future', 'lonely'] });
+		expect(k.refused).toEqual([
+			expect.objectContaining({
+				id: 'lonely',
+				code: 'missing_dependency',
+				params: { extensionId: 'nowhere' },
+			}),
+			expect.objectContaining({
+				id: 'future',
+				code: 'sdk',
+				params: { needs: '^9.0.0', has: SDK_VERSION },
+			}),
 		]);
 	});
 
@@ -123,7 +188,11 @@ describe('a kernel with extensions it may refuse', () => {
 			(e: unknown) => e,
 		);
 		expect(isExtensionRefusedError(error)).toBe(true);
-		expect(error).toMatchObject({ extensionId: 'failing', reason: 'Its start failed: no luck' });
+		expect(error).toMatchObject({
+			extensionId: 'failing',
+			reason: 'Its start failed: no luck',
+			code: 'start_failed',
+		});
 		// One that is always there fails as it is.
 		await expect(kernel({ extensions: [failing] })).rejects.toThrow('no luck');
 	});
@@ -259,6 +328,114 @@ describe('installing and uninstalling', () => {
 		expect((await readExtensionState(k.ctx.db))?.restartRequestedAt).toBe(k.clock.now());
 		await new Promise((r) => setTimeout(r, 0));
 		expect(heard).toEqual([k.clock.now()]);
+	});
+
+	/** A file as an upload route receives it; its first byte picks the test port's upload. */
+	const file = (first: number) => ({
+		field: 'file',
+		name: 'package.famext',
+		type: 'application/octet-stream',
+		size: 1,
+		stream: async function* () {
+			yield Uint8Array.of(first);
+		},
+		bytes: async () => Uint8Array.of(first),
+	});
+	const PETS_DIGEST = `1${'a'.repeat(31)}`;
+	const RECORDS_DIGEST = `2${'b'.repeat(31)}`;
+
+	it('stages an uploaded package, says what it is, and installs it with what it needs', async () => {
+		const ports = packages(
+			[{ ext: notes, always: true }, { ext: records }],
+			[upload(pets, PETS_DIGEST, '1.0.0')],
+		);
+		const k = await kernel({ extensions: [notes], extensionPackages: ports });
+		const actor = await admin(k);
+		const staged = await k.route('core.uploadExtensionPackage').call({ actor, files: [file(1)] });
+		expect(staged).toEqual({
+			digest: PETS_DIGEST,
+			id: 'pets',
+			version: '1.0.0',
+			current: null,
+			labels: { en: { name: 'pets', description: 'The pets' } },
+			dependsOn: ['records'],
+			optional: [],
+			reaches: {
+				hosts: ['vets.example.org'],
+				userUrls: false,
+				local: true,
+				calls: [],
+				capabilities: ['pets.view'],
+			},
+			signer: { keyId: '0123456789abcdef', kind: 'official' },
+		});
+		// Nothing is installed by the upload itself.
+		expect(ports.placed).toEqual([]);
+		const result = await k.runner.invoke('core.installExtension', { staged: PETS_DIGEST }, actor);
+		expect(result).toEqual({
+			status: 'applied',
+			output: { changed: ['records', 'pets'], restartNeeded: true },
+		});
+		expect(ports.placed).toEqual(['records', 'pets@1.0.0']);
+		expect((await readExtensionState(k.ctx.db))?.installed).toEqual(['notes', 'pets', 'records']);
+	});
+
+	it('installs a newer version of a running extension, which loads at the next start', async () => {
+		const ports = packages(
+			[{ ext: notes, always: true }, { ext: records }],
+			[upload(records, RECORDS_DIGEST, '0.2.0')],
+		);
+		const k = await kernel({ extensions: [notes, records], extensionPackages: ports });
+		const actor = await admin(k);
+		const staged = await k.route('core.uploadExtensionPackage').call({ actor, files: [file(2)] });
+		expect(staged).toMatchObject({ id: 'records', version: '0.2.0', current: '0.0.0' });
+		await expect(
+			k.runner.invoke('core.installExtension', { staged: RECORDS_DIGEST }, actor),
+		).resolves.toMatchObject({ output: { changed: ['records'] } });
+		expect(ports.placed).toEqual(['records@0.2.0']);
+	});
+
+	it('shows a running extension whose next start brings another version', async () => {
+		// The port lists what the next start loads: records 0.2.0, while 0.0.0 runs.
+		const port: ExtensionPackagesPort = {
+			list: () => [{ ...upload(records, RECORDS_DIGEST, '0.2.0'), always: false }],
+			place: () => Promise.reject(new Error('not used')),
+		};
+		const k = await kernel({ extensions: [notes, records], extensionPackages: port });
+		const list = await k.route('core.listExtensions').call({ actor: await admin(k) });
+		expect(list.restartNeeded).toBe(true);
+		expect(list.extensions.find((e: { id: string }) => e.id === 'records')).toMatchObject({
+			status: 'loaded',
+			version: '0.0.0',
+			nextVersion: '0.2.0',
+		});
+		expect(list.extensions.find((e: { id: string }) => e.id === 'notes').nextVersion).toBeNull();
+	});
+
+	it('refuses an upload without a file, from anyone but a person, and where files cannot install', async () => {
+		const k = await kernel({
+			extensions: [notes],
+			extensionPackages: packages([{ ext: notes, always: true }], [upload(pets, PETS_DIGEST)]),
+		});
+		const route = k.route('core.uploadExtensionPackage');
+		await expect(route.call({ actor: await admin(k), files: [] })).rejects.toMatchObject({
+			code: 'bad_request',
+		});
+		await expect(
+			route.call({
+				actor: { kind: 'display', deviceId: 'd', capabilities: [], showNames: false },
+				files: [file(1)],
+			}),
+		).rejects.toMatchObject({ code: 'forbidden' });
+		await expect(
+			k.runner.invoke('core.installExtension', { staged: RECORDS_DIGEST }, await admin(k)),
+		).rejects.toMatchObject({ code: 'not_found' });
+		const without = await kernel({ extensions: [notes] });
+		await expect(
+			without
+				.route('core.uploadExtensionPackage')
+				.call({ actor: await admin(without), files: [file(1)] }),
+		).rejects.toMatchObject({ code: 'bad_request' });
 	});
 
 	it('is for admins and the server alone: not other members, displays or any AI', async () => {
