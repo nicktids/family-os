@@ -424,6 +424,9 @@ importers:
       '@famos/ext-calendar':
         specifier: workspace:*
         version: link:../calendar
+      '@famos/pack':
+        specifier: workspace:*
+        version: link:../../packages/pack
       '@famos/testing':
         specifier: workspace:*
         version: link:../../packages/testing
@@ -476,6 +479,9 @@ importers:
       '@famos/ext-vehicles':
         specifier: workspace:*
         version: link:../vehicles
+      '@famos/pack':
+        specifier: workspace:*
+        version: link:../../packages/pack
       '@famos/testing':
         specifier: workspace:*
         version: link:../../packages/testing
@@ -516,6 +522,9 @@ importers:
         specifier: 4.6.5
         version: 4.6.5
     devDependencies:
+      '@famos/pack':
+        specifier: workspace:*
+        version: link:../../packages/pack
       '@famos/testing':
         specifier: workspace:*
         version: link:../../packages/testing
@@ -556,6 +565,9 @@ importers:
         specifier: 4.6.5
         version: 4.6.5
     devDependencies:
+      '@famos/pack':
+        specifier: workspace:*
+        version: link:../../packages/pack
       '@famos/testing':
         specifier: workspace:*
         version: link:../../packages/testing
@@ -593,6 +605,9 @@ importers:
         specifier: 4.6.5
         version: 4.6.5
     devDependencies:
+      '@famos/pack':
+        specifier: workspace:*
+        version: link:../../packages/pack
       '@famos/testing':
         specifier: workspace:*
         version: link:../../packages/testing
@@ -611,9 +626,6 @@ importers:
       '@famos/api-client':
         specifier: workspace:*
         version: link:../../packages/api-client
-      '@famos/ext-inbox':
-        specifier: workspace:*
-        version: link:../inbox
       '@famos/ext-records':
         specifier: workspace:*
         version: link:../records
@@ -636,6 +648,12 @@ importers:
         specifier: 4.6.5
         version: 4.6.5
     devDependencies:
+      '@famos/ext-inbox':
+        specifier: workspace:*
+        version: link:../inbox
+      '@famos/pack':
+        specifier: workspace:*
+        version: link:../../packages/pack
       '@famos/testing':
         specifier: workspace:*
         version: link:../../packages/testing
@@ -679,21 +697,15 @@ importers:
       '@famos/ext-calendar':
         specifier: workspace:*
         version: link:../calendar
-      '@famos/ext-home':
-        specifier: workspace:*
-        version: link:../home
       '@famos/ext-lists':
         specifier: workspace:*
         version: link:../lists
-      '@famos/ext-pets':
-        specifier: workspace:*
-        version: link:../pets
       '@famos/ext-records':
         specifier: workspace:*
         version: link:../records
-      '@famos/ext-vehicles':
+      '@famos/pack':
         specifier: workspace:*
-        version: link:../vehicles
+        version: link:../../packages/pack
       '@famos/testing':
         specifier: workspace:*
         version: link:../../packages/testing
@@ -737,6 +749,9 @@ importers:
         specifier: 4.6.5
         version: 4.6.5
     devDependencies:
+      '@famos/pack':
+        specifier: workspace:*
+        version: link:../../packages/pack
       '@famos/testing':
         specifier: workspace:*
         version: link:../../packages/testing
@@ -774,6 +789,9 @@ importers:
         specifier: 4.6.5
         version: 4.6.5
     devDependencies:
+      '@famos/pack':
+        specifier: workspace:*
+        version: link:../../packages/pack
       '@famos/testing':
         specifier: workspace:*
         version: link:../../packages/testing
@@ -792,9 +810,6 @@ importers:
       '@famos/api-client':
         specifier: workspace:*
         version: link:../../packages/api-client
-      '@famos/ext-inbox':
-        specifier: workspace:*
-        version: link:../inbox
       '@famos/ext-records':
         specifier: workspace:*
         version: link:../records
@@ -817,6 +832,12 @@ importers:
         specifier: 4.6.5
         version: 4.6.5
     devDependencies:
+      '@famos/ext-inbox':
+        specifier: workspace:*
+        version: link:../inbox
+      '@famos/pack':
+        specifier: workspace:*
+        version: link:../../packages/pack
       '@famos/testing':
         specifier: workspace:*
         version: link:../../packages/testing
@@ -854,6 +875,9 @@ importers:
         specifier: 4.6.5
         version: 4.6.5
     devDependencies:
+      '@famos/pack':
+        specifier: workspace:*
+        version: link:../../packages/pack
       '@famos/testing':
         specifier: workspace:*
         version: link:../../packages/testing
@@ -872,9 +896,6 @@ importers:
       '@famos/api-client':
         specifier: workspace:*
         version: link:../../packages/api-client
-      '@famos/ext-inbox':
-        specifier: workspace:*
-        version: link:../inbox
       '@famos/ext-records':
         specifier: workspace:*
         version: link:../records
@@ -897,6 +918,12 @@ importers:
         specifier: 4.6.5
         version: 4.6.5
     devDependencies:
+      '@famos/ext-inbox':
+        specifier: workspace:*
+        version: link:../inbox
+      '@famos/pack':
+        specifier: workspace:*
+        version: link:../../packages/pack
       '@famos/testing':
         specifier: workspace:*
         version: link:../../packages/testing
@@ -1012,6 +1039,27 @@ importers:
       zod:
         specifier: 4.6.5
         version: 4.6.5
+
+  packages/pack:
+    dependencies:
+      '@famos/api-client':
+        specifier: workspace:*
+        version: link:../api-client
+      '@famos/sdk':
+        specifier: workspace:*
+        version: link:../sdk
+      '@famos/time':
+        specifier: workspace:*
+        version: link:../time
+      '@famos/ui':
+        specifier: workspace:*
+        version: link:../ui
+      esbuild:
+        specifier: 0.28.2
+        version: 0.28.2
+      svelte:
+        specifier: 5.57.1
+        version: 5.57.1
 
   packages/sdk:
     dependencies:
