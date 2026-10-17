@@ -17,7 +17,7 @@ import {
 	says,
 	type Turn,
 } from '../eval/checks.ts';
-import { actionIdOf, report, runCase } from '../eval/harness.ts';
+import { actionIdOf, plainText, report, runCase } from '../eval/harness.ts';
 import { DEFAULT_FAMILY, seed } from '../eval/seed.ts';
 import assistant from '../src/server/index.ts';
 
@@ -87,6 +87,13 @@ describe('the eval checks', () => {
 		expect(either(says(/already/), says(/oat/i)).pass(outcome({ reply: 'Milk' }))).toBe(false);
 	});
 
+	it('reads answers in plain typography (real model output)', () => {
+		// nemotron wrote "Tuesday 6 October" with narrow no-break spaces.
+		expect(plainText('Tuesday\u202f6\u00a0October, I couldn\u2019t')).toBe(
+			"Tuesday 6 October, I couldn't",
+		);
+	});
+
 	it('maps tool names back to action ids', () => {
 		expect(actionIdOf('calendar_findEvents')).toBe('calendar.findEvents');
 		expect(actionIdOf('lists_checkShoppingItem')).toBe('lists.checkShoppingItem');
@@ -125,6 +132,18 @@ describe('a case run end to end with a scripted model', () => {
 		if (!found) throw new Error(`no case ${name}`);
 		return found;
 	};
+
+	it('reads a typographic apostrophe as a plain one (real model output)', async () => {
+		const llm = createFakeLlm();
+		llm.respondChat([
+			{ tool: 'calendar_findEvents', input: { text: 'Dental cleaning' } },
+			{
+				text: 'I couldn’t find any calendar event titled “Dental cleaning.” If you meant a different event (for example, the “Dentist checkup” on October 8 at 09:30), please let me know the exact title or date so I can update it for you.',
+			},
+		]);
+		const result = await runCase(byName('not there: "Dental cleaning"'), llm);
+		expect(result.failed).toEqual([]);
+	});
 
 	it('passes the single-date move when the model gives the date', async () => {
 		const llm = createFakeLlm();
