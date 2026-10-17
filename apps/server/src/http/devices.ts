@@ -330,7 +330,7 @@ function mountDisplayRoutes(
 			c.req.valid('param').deviceId,
 			c.req.valid('json'),
 		);
-		return c.json(toDevice(row), 200);
+		return c.json(toDevice(row, devices.leftOut(row.id)), 200);
 	});
 
 	const me = createRoute({
@@ -401,5 +401,38 @@ function mountDisplayRoutes(
 			},
 			200,
 		);
+	});
+
+	// What the display's screen had no room for. Not a change of the family's data (it is the
+	// screen describing itself, kept in memory like `last_seen_at`). A read, like the display's
+	// other requests: a display only ever reads, and that stays checkable from outside.
+	const fit = createRoute({
+		method: 'get',
+		path: '/api/v1/core/displays/me/fit',
+		operationId: 'core.reportDisplayFit',
+		summary: 'The display tells what its screen had no room for',
+		tags: ['core'],
+		request: {
+			// Comma-separated widget and block ids; empty when everything fitted.
+			query: z.object({ leftOut: z.string().max(4000).default('') }),
+		},
+		responses: {
+			204: { description: 'Noted' },
+			...errorResponses,
+		},
+	});
+	app.openapi(fit, async (c) => {
+		const actor = c.get('actor');
+		refuseFamilyBrowser(c);
+		if (actor?.kind !== 'display')
+			throw new FamosError('unauthenticated', 'This is not a paired display');
+		const leftOut = c.req
+			.valid('query')
+			.leftOut.split(',')
+			.map((id) => id.trim())
+			.filter((id) => id.length > 0 && id.length <= 100)
+			.slice(0, 40);
+		await devices.reportFit(actor.deviceId, leftOut);
+		return c.body(null, 204);
 	});
 }

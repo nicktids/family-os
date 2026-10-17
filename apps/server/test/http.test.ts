@@ -930,6 +930,37 @@ describe('family displays', () => {
 		).toBe(401);
 	});
 
+	it('tells the admin what a display had no room for; only the display itself may say it', async () => {
+		const { cookie } = await setupAndSignIn();
+		const { displayCookie, deviceId } = await pairDisplay(cookie);
+		const fit = '/api/v1/core/displays/me/fit';
+		const leftOut = async () =>
+			(
+				(await call('GET', '/api/v1/core/devices', undefined, cookie)).body as {
+					id: string;
+					display: { leftOut: string[] } | null;
+				}[]
+			).find((d) => d.id === deviceId)?.display?.leftOut;
+		expect(await leftOut()).toEqual([]);
+
+		const report = (ids: string, who?: string) =>
+			call('GET', `${fit}?leftOut=${encodeURIComponent(ids)}`, undefined, who);
+		const said = await report('homeassistant.values,family,family', displayCookie);
+		expect(said.status).toBe(204);
+		expect(await leftOut()).toEqual(['family', 'homeassistant.values']);
+
+		// A member or a stranger changes nothing; empty and overlong ids are dropped.
+		expect((await report('', cookie)).status).toBe(409);
+		expect((await report('')).status).toBe(401);
+		expect(await leftOut()).toEqual(['family', 'homeassistant.values']);
+		expect((await report(` , ,${'x'.repeat(101)},family`, displayCookie)).status).toBe(204);
+		expect(await leftOut()).toEqual(['family']);
+
+		// Everything fits again: nothing to say.
+		expect((await report('', displayCookie)).status).toBe(204);
+		expect(await leftOut()).toEqual([]);
+	});
+
 	it('refuses to pair a browser the family uses', async () => {
 		const { cookie } = await setupAndSignIn();
 		const { deviceCookie } = await trustDevice(cookie);
