@@ -58,6 +58,7 @@ import { NextUpModeSchema, readNextUp, setMyNextUp } from './next-up.ts';
 import type { createNotifications } from './notifications.ts';
 import type { Registry } from './registry.ts';
 import type { Search } from './search.ts';
+import { readStoredInput } from './stored-input.ts';
 import type { CoreTables, DeviceRow, DraftRow, MemberRow } from './tables.ts';
 import type { Themes } from './themes.ts';
 
@@ -264,11 +265,12 @@ const toDraft = (
 	before: Record<string, unknown> | null = null,
 	subject: string | null = null,
 	suggestedAgain = false,
+	read: (json: string) => unknown = JSON.parse,
 ): z.infer<typeof DraftSchema> => ({
 	id: row.id,
 	actionId: row.action_id,
-	input: JSON.parse(row.input),
-	editedInput: row.edited_input === null ? null : JSON.parse(row.edited_input),
+	input: read(row.input),
+	editedInput: row.edited_input === null ? null : read(row.edited_input),
 	status: row.status,
 	proposedBy: JSON.parse(row.proposed_by),
 	sourceKind: row.source_kind,
@@ -1395,7 +1397,7 @@ export function createCoreExtension(deps: CoreExtensionDeps) {
 				const look = def?.targetTitle ?? def?.subject;
 				if (named || !def || !look) return named;
 				try {
-					const input = def.input.safeParse(JSON.parse(raw));
+					const input = def.input.safeParse(readStoredInput(def, raw));
 					return input.success
 						? ((await look(ctxOf(def), input.data)) ?? undefined)?.slice(0, 80)
 						: undefined;
@@ -1411,7 +1413,7 @@ export function createCoreExtension(deps: CoreExtensionDeps) {
 				const def = actions.get(row.action_id);
 				if (!def?.scopeNote) return undefined;
 				try {
-					const input = def.input.safeParse(JSON.parse(row.edited_input ?? row.input));
+					const input = def.input.safeParse(readStoredInput(def, row.edited_input ?? row.input));
 					const note = input.success ? await def.scopeNote(ctxOf(def), input.data) : null;
 					return note
 						? uow.translate(language, note.key, {
@@ -1489,6 +1491,7 @@ export function createCoreExtension(deps: CoreExtensionDeps) {
 			await deps.runner().currentValues(row),
 			await deps.runner().subject(row),
 			await deps.runner().suggestedAgain(row),
+			(json) => readStoredInput(deps.registry().actions.get(row.action_id), json),
 		);
 
 	const approve = defineRoute({

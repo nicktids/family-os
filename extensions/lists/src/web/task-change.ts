@@ -1,6 +1,6 @@
 import { describeRecurrence, todayIn } from '@famos/time';
 import { changed, type DraftBefore, type DraftField, type PresenterContext } from '@famos/ui/slots';
-import type { TaskInput } from '../contract/index.js';
+import type { TaskReplace } from '../contract/index.js';
 import { dueLabel } from './format.js';
 import type { ListsT } from './i18n.js';
 
@@ -74,7 +74,7 @@ export function changeTaskFields(
 }
 
 /** What a `lists.updateTask` draft carries: the whole task as the form saved it. */
-export type UpdateTaskInput = { id: string; label?: string; task: TaskInput };
+export type UpdateTaskInput = { id: string; label?: string; task: TaskReplace };
 
 /**
  * The rows of a saved edit of a task: the form sends every field, and `before` holds the ones
