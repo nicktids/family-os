@@ -1,8 +1,8 @@
 {
 	"case": "Bare weekday (Turkish)",
 	"model": "openrouter / nvidia/nemotron-3.5-super-vl:free",
-	"version": "inbox.understand/1",
-	"promptHash": "4e5f4b61",
+	"version": "inbox.understand/2",
+	"promptHash": "d78e697a",
 	"answers": [
 		{
 			"kind": "object",
@@ -22,12 +22,13 @@
 							"weekday": 5
 						},
 						"time": "15:00",
-						"timeText": "15:00"
+						"timeText": "15:00",
+						"quote": "Cuma günü saat 15:00'te Elif'in doğum günü partisine Deniz de davetli"
 					},
 					{
 						"kind": "lists.shoppingItem",
 						"title": "Hediye",
-						"notes": "Elif'in doğum günü partisi için"
+						"quote": "Hediye almayı unutmayalım"
 					}
 				]
 			}

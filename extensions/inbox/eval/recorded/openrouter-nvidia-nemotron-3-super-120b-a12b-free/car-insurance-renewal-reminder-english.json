@@ -1,8 +1,8 @@
 {
 	"case": "Car insurance renewal reminder (English)",
 	"model": "openrouter / nvidia/nemotron-3-super-120b-a12b:free",
-	"version": "inbox.understand/1",
-	"promptHash": "4e5f4b61",
+	"version": "inbox.understand/2",
+	"promptHash": "d78e697a",
 	"answers": [
 		{
 			"kind": "object",
@@ -12,13 +12,15 @@
 				"intent": "actionable",
 				"mentions": [
 					{
-						"kind": "records.duty",
-						"title": "Car insurance",
-						"about": "Golf",
-						"variant": "due",
-						"unsure": [
-							"date"
-						]
+						"kind": "lists.task",
+						"title": "Renew car insurance",
+						"date": {
+							"text": "20 October 2026",
+							"day": 20,
+							"month": 10,
+							"year": 2026
+						},
+						"quote": "your comprehensive car insurance policy for your Golf ends on 20 October 2026. Renew before then to stay covered."
 					}
 				]
 			}

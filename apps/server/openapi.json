@@ -19792,6 +19792,12 @@
 													"type": "string"
 												}
 											},
+											"quote": {
+												"type": [
+													"string",
+													"null"
+												]
+											},
 											"error": {
 												"type": [
 													"string",
@@ -19913,6 +19919,7 @@
 											"summary",
 											"confidence",
 											"uncertainFields",
+											"quote",
 											"error",
 											"forMember",
 											"createdAt",
@@ -20502,6 +20509,12 @@
 												"type": "string"
 											}
 										},
+										"quote": {
+											"type": [
+												"string",
+												"null"
+											]
+										},
 										"error": {
 											"type": [
 												"string",
@@ -20623,6 +20636,7 @@
 										"summary",
 										"confidence",
 										"uncertainFields",
+										"quote",
 										"error",
 										"forMember",
 										"createdAt",
@@ -20947,6 +20961,12 @@
 												"type": "string"
 											}
 										},
+										"quote": {
+											"type": [
+												"string",
+												"null"
+											]
+										},
 										"error": {
 											"type": [
 												"string",
@@ -21068,6 +21088,7 @@
 										"summary",
 										"confidence",
 										"uncertainFields",
+										"quote",
 										"error",
 										"forMember",
 										"createdAt",
@@ -21392,6 +21413,12 @@
 												"type": "string"
 											}
 										},
+										"quote": {
+											"type": [
+												"string",
+												"null"
+											]
+										},
 										"error": {
 											"type": [
 												"string",
@@ -21513,6 +21540,7 @@
 										"summary",
 										"confidence",
 										"uncertainFields",
+										"quote",
 										"error",
 										"forMember",
 										"createdAt",
@@ -21837,6 +21865,12 @@
 												"type": "string"
 											}
 										},
+										"quote": {
+											"type": [
+												"string",
+												"null"
+											]
+										},
 										"error": {
 											"type": [
 												"string",
@@ -21958,6 +21992,7 @@
 										"summary",
 										"confidence",
 										"uncertainFields",
+										"quote",
 										"error",
 										"forMember",
 										"createdAt",
@@ -22282,6 +22317,12 @@
 												"type": "string"
 											}
 										},
+										"quote": {
+											"type": [
+												"string",
+												"null"
+											]
+										},
 										"error": {
 											"type": [
 												"string",
@@ -22403,6 +22444,7 @@
 										"summary",
 										"confidence",
 										"uncertainFields",
+										"quote",
 										"error",
 										"forMember",
 										"createdAt",

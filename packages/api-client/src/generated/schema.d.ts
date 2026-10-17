@@ -11194,6 +11194,7 @@ export interface operations {
                         summary: string | null;
                         confidence: number | null;
                         uncertainFields: string[];
+                        quote: string | null;
                         error: string | null;
                         forMember: string | null;
                         createdAt: number;
@@ -11494,6 +11495,7 @@ export interface operations {
                         summary: string | null;
                         confidence: number | null;
                         uncertainFields: string[];
+                        quote: string | null;
                         error: string | null;
                         forMember: string | null;
                         createdAt: number;
@@ -11661,6 +11663,7 @@ export interface operations {
                         summary: string | null;
                         confidence: number | null;
                         uncertainFields: string[];
+                        quote: string | null;
                         error: string | null;
                         forMember: string | null;
                         createdAt: number;
@@ -11828,6 +11831,7 @@ export interface operations {
                         summary: string | null;
                         confidence: number | null;
                         uncertainFields: string[];
+                        quote: string | null;
                         error: string | null;
                         forMember: string | null;
                         createdAt: number;
@@ -11995,6 +11999,7 @@ export interface operations {
                         summary: string | null;
                         confidence: number | null;
                         uncertainFields: string[];
+                        quote: string | null;
                         error: string | null;
                         forMember: string | null;
                         createdAt: number;
@@ -12162,6 +12167,7 @@ export interface operations {
                         summary: string | null;
                         confidence: number | null;
                         uncertainFields: string[];
+                        quote: string | null;
                         error: string | null;
                         forMember: string | null;
                         createdAt: number;

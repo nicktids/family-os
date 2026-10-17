@@ -1,15 +1,16 @@
 {
 	"case": "School trip notice (Turkish)",
 	"model": "openrouter / nvidia/nemotron-3.5-super-vl:free",
-	"version": "inbox.understand/1",
-	"promptHash": "4e5f4b61",
+	"version": "inbox.understand/2",
+	"promptHash": "d78e697a",
 	"answers": [
 		{
 			"kind": "object",
 			"feature": "inbox.extract",
 			"output": {
-				"label": "4-B sınıf gezisi ve veli toplantısı",
+				"label": "4-B sınıfı gezisi ve veli toplantısı",
 				"intent": "actionable",
+				"addressed": [],
 				"mentions": [
 					{
 						"kind": "calendar.event",
@@ -21,40 +22,48 @@
 							"text": "16 Ekim Cuma",
 							"day": 16,
 							"month": 10,
+							"year": 2026,
 							"weekday": 5
 						},
 						"time": "08:30",
 						"timeText": "08:30",
 						"endTime": "15:00",
 						"place": "Gaziantep Hayvanat Bahçesi",
-						"notes": "Beslenme çantası, su şişesi ve yağmurluk ile gelmeli"
+						"notes": "Beslenme çantası, su şişesi ve yağmurluk",
+						"quote": "4-B sınıfımız 16 Ekim Cuma günü Gaziantep Hayvanat Bahçesi'ne eğitim gezisine gidecektir. Öğrencilerimiz saat 08:30'da okulda olmalı, dönüş 15:00 civarında olacaktır."
 					},
 					{
 						"kind": "lists.task",
-						"title": "Gezi ücreti ödemesi",
+						"title": "Gezi ücretini sınıf öğretmenine elden teslim et",
 						"people": [
-							"Deniz"
+							"Ayşe"
 						],
+						"forMe": true,
 						"date": {
 							"text": "9 Ekim Perşembe",
 							"day": 9,
 							"month": 10,
+							"year": 2026,
 							"weekday": 4
 						},
-						"notes": "Ücret: 150 TL, sınıf öğretmenine elden teslim edilecek"
+						"notes": "Ücret: 150 TL",
+						"quote": "Gezi ücreti 150 TL'dir ve en geç 9 Ekim Perşembe gününe kadar sınıf öğretmenine elden teslim edilmelidir."
 					},
 					{
 						"kind": "lists.task",
-						"title": "İmzalı veli izin formu getirme",
+						"title": "İmzalı veli izin formunu getir",
 						"people": [
-							"Deniz"
+							"Ayşe"
 						],
+						"forMe": true,
 						"date": {
 							"text": "9 Ekim Perşembe",
 							"day": 9,
 							"month": 10,
+							"year": 2026,
 							"weekday": 4
-						}
+						},
+						"quote": "İmzalı veli izin formunu da aynı gün getirmeyi unutmayınız."
 					},
 					{
 						"kind": "calendar.event",
@@ -63,10 +72,12 @@
 							"text": "20 Ekim Salı",
 							"day": 20,
 							"month": 10,
+							"year": 2026,
 							"weekday": 2
 						},
 						"time": "18:00",
-						"timeText": "18:00"
+						"timeText": "18:00",
+						"quote": "20 Ekim Salı günü saat 18:00'de veli toplantımız yapılacaktır."
 					}
 				]
 			}
