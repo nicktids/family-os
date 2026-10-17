@@ -96,6 +96,34 @@ describe('measuring a case', () => {
 		expect(observed.notes).toEqual(['call failed: invalid_output: not the structure']);
 	});
 
+	it('lets the time pass a provider that cannot serve the call asks for, before the next try', async () => {
+		const { env, fake } = fakeEnv('a');
+		const limited = new LlmError('unavailable', 'The provider is rate limited (HTTP 429)', {
+			retryAfterMs: 40_000,
+		});
+		fake.respond(limited, new LlmError('unavailable', 'down'), { title: 'Milk' }, limited);
+		const waits: number[] = [];
+		const observed = observe(env, false, async (ms) => void waits.push(ms));
+		// Each failure still fails, so the job that made it tries again as it would at home.
+		await expect(observed.llm.generateObject(request)).rejects.toMatchObject({
+			code: 'unavailable',
+		});
+		await expect(observed.llm.generateObject(request)).rejects.toMatchObject({
+			code: 'unavailable',
+		});
+		await observed.llm.generateObject(request);
+		await expect(observed.llm.generateObject(request)).rejects.toThrow();
+		// What the provider asked for, or a wait that grows with each failure in a row; an answer
+		// starts the count again.
+		expect(waits).toEqual([40_000, 30_000, 40_000]);
+		expect(observed.calls.map((c) => c.answer)).toEqual([
+			{ kind: 'object', feature: 'test.read', error: 'unavailable' },
+			{ kind: 'object', feature: 'test.read', error: 'unavailable' },
+			{ kind: 'object', feature: 'test.read', output: { title: 'Milk' } },
+			{ kind: 'object', feature: 'test.read', error: 'unavailable' },
+		]);
+	});
+
 	it('keeps the tool calls of a chat', async () => {
 		const { env, fake } = fakeEnv('a');
 		fake.respondChat([{ tool: 'find', input: { q: 'milk' } }, { text: 'Found it' }]);
@@ -272,6 +300,7 @@ describe('runEval', () => {
 		const code = await runEval({
 			title: 'Test eval',
 			version: 'test/1',
+			promptHash: 'abcd1234',
 			cases,
 			models: [a.env, b.env],
 			dir,
@@ -299,11 +328,13 @@ describe('runEval', () => {
 			case: 'bread',
 			model: 'fake / b',
 			version: 'test/1',
+			promptHash: 'abcd1234',
 			answers: [{ kind: 'object', feature: 'test.read', output: { title: 'Butter' } }],
 		});
 		const baseline = JSON.parse(readFileSync(join(dir, 'baseline.json'), 'utf8')) as Baseline;
 		expect(baseline.models.b).toMatchObject({
 			version: 'test/1',
+			promptHash: 'abcd1234',
 			cases: 2,
 			passing: ['milk'],
 			failing: { bread: ['the title'] },
@@ -340,6 +371,7 @@ describe('runEval', () => {
 			cases: [{ name: 'one' }, { name: 'two' }],
 			models: [a.env],
 			dir,
+			wait: async () => undefined,
 			env: { FAMOS_EVAL_BASELINE: '1', FAMOS_EVAL_CONCURRENCY: '1' },
 			log: (line) => lines.push(line),
 			async run(_c, llm) {
@@ -361,6 +393,42 @@ describe('runEval', () => {
 			failing: {},
 			outages: ['one'],
 		});
+	});
+
+	it('keeps the baseline of a model the provider never answered', async () => {
+		dir = mkdtempSync(join(tmpdir(), 'famos-eval-'));
+		const earlier = {
+			label: 'fake / a',
+			version: 'test/1',
+			promptHash: 'old00000',
+			date: '2026-10-16',
+			cases: 1,
+			passing: ['one'],
+			failing: {},
+			cost: 0,
+		};
+		writeFileSync(join(dir, 'baseline.json'), JSON.stringify({ models: { a: earlier } }));
+		// As OpenRouter answered once its key was refused: every call fails as `auth`.
+		const a = fakeEnv('a', call({ errorCode: 'auth', finishReason: null }));
+		a.fake.respond(new LlmError('auth', 'The provider refused the API key'));
+		const lines: string[] = [];
+		await runEval({
+			title: 'Test eval',
+			version: 'test/1',
+			promptHash: 'new00000',
+			cases: [{ name: 'one' }],
+			models: [a.env],
+			dir,
+			env: { FAMOS_EVAL_BASELINE: '1' },
+			log: (line) => lines.push(line),
+			async run(_c, llm) {
+				await llm.generateObject(request).catch(() => undefined);
+				return { ok: false, checks: 1, failed: ['x'], lines: [] };
+			},
+		});
+		expect(lines).toContain('Baseline of fake / a kept: every case was an outage.');
+		const baseline = JSON.parse(readFileSync(join(dir, 'baseline.json'), 'utf8')) as Baseline;
+		expect(baseline.models.a).toEqual(earlier);
 	});
 
 	it('stops starting cases at the cost cap and keeps no baseline then', async () => {

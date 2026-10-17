@@ -13,7 +13,8 @@ import {
 	createSecretBox,
 	monthBounds,
 } from '../src/llm-aisdk/index.ts';
-import { extractJson, outputModeFor } from '../src/llm-aisdk/output.ts';
+import { retryAfterOf } from '../src/llm-aisdk/llm.ts';
+import { extractJson, outputModeFor, reasoningFor } from '../src/llm-aisdk/output.ts';
 import { silentLogger, uuidv7Ids } from '../src/runtime/index.ts';
 
 // A stand-in OpenAI-compatible server: behaviour is chosen by the requested model id.
@@ -99,6 +100,15 @@ const server = http.createServer((req, res) => {
 			);
 		if (model === 'denied')
 			return res.writeHead(401).end(JSON.stringify({ error: { message: 'bad key' } }));
+		// Rate limits, as free models answer: `busy-once` asks for a short wait on its first call
+		// only, `busy-long` always asks for two minutes.
+		if (
+			model === 'busy-long' ||
+			(model === 'busy-once' && seen.filter((c) => c.body.model === model).length === 1)
+		)
+			return res
+				.writeHead(429, { 'retry-after': model === 'busy-long' ? '120' : '0.05' })
+				.end(JSON.stringify({ error: { message: 'Rate limit exceeded' } }));
 		// A model without a thinking mode refuses the setting.
 		if (model === 'no-thinking' && (body.reasoning_effort || body.reasoning))
 			return res
@@ -639,6 +649,26 @@ describe('AI SDK LlmPort', () => {
 		]);
 	});
 
+	it('waits out a short rate limit once, and leaves a long one to the job', async () => {
+		await useModel('busy-once');
+		await expect(ask()).resolves.toMatchObject({ output: { title: 'Zoo trip' } });
+		expect(seen.filter((c) => c.body.model === 'busy-once')).toHaveLength(2);
+		seen.length = 0;
+		await useModel('busy-long');
+		const error = await ask().catch((e: unknown) => e);
+		expect(error).toMatchObject({ code: 'unavailable', retryable: true, retryAfterMs: 120_000 });
+		// The AI SDK's own retry of a 429 aside, the adapter does not ask again in the same call.
+		expect(seen.filter((c) => c.body.model === 'busy-long').length).toBeLessThanOrEqual(2);
+	});
+
+	it('reads a retry-after in seconds or as a date', () => {
+		const now = Date.parse('2026-10-17T10:00:00Z');
+		expect(retryAfterOf({ 'Retry-After': '3' }, now)).toBe(3000);
+		expect(retryAfterOf({ 'retry-after': 'Sat, 17 Oct 2026 10:00:30 GMT' }, now)).toBe(30_000);
+		expect(retryAfterOf({ 'retry-after': 'soon' }, now)).toBeUndefined();
+		expect(retryAfterOf(undefined, now)).toBeUndefined();
+	});
+
 	it('passes the output cap on, and fails an answer the cap cut off without a retry', async () => {
 		await useModel('priced', 'openai-compatible');
 		await llm.generateObject({
@@ -729,6 +759,16 @@ describe('AI SDK LlmPort', () => {
 			expect(seen[1]?.body.reasoning).toEqual({ effort: 'none' });
 		});
 
+		it('turns thinking off for a model that would think the whole answer away, unless asked', async () => {
+			await useModel('nvidia/nemotron-3.5-super-vl:free');
+			await askWith();
+			expect(seen[0]?.body.reasoning).toEqual({ effort: 'none' });
+			await askWith('high');
+			expect(seen[1]?.body.reasoning).toEqual({ effort: 'high' });
+			expect(reasoningFor('openrouter', 'nvidia/nemotron-3-super-120b-a12b:free')).toBe('off');
+			expect(reasoningFor('openrouter', 'google/gemini-2.5-flash')).toBeUndefined();
+		});
+
 		it('asks again without it when the provider refuses the setting', async () => {
 			await useModel('no-thinking', 'openai-compatible');
 			await expect(askWith('low')).resolves.toMatchObject({ output: { title: 'Zoo trip' } });
@@ -755,6 +795,8 @@ describe('AI SDK LlmPort', () => {
 			// The prefix belongs to its provider: another server may host something else by the name.
 			expect(outputModeFor('ollama', 'gpt-4.1')).toBe('json');
 			expect(outputModeFor('ollama', 'qwen3:8b')).toBe('json');
+			expect(outputModeFor('openrouter', 'nvidia/nemotron-3-super-120b-a12b:free')).toBe('schema');
+			expect(outputModeFor('openrouter', 'nvidia/nemotron-3.5-super-vl:free')).toBe('json');
 		});
 
 		it('gives a model that follows a JSON Schema the schema, and records the mode', async () => {

@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { isLlmError, type LlmPort } from '@famos/sdk';
 import { type EnvCall, type EnvLlm, llmsFromEnv, slugOf } from './llm-from-env.ts';
 
@@ -18,6 +19,8 @@ import { type EnvCall, type EnvLlm, llmsFromEnv, slugOf } from './llm-from-env.t
  * - `FAMOS_EVAL_BASELINE=1`: writes `<eval folder>/baseline.json` for the models of a full run.
  * - `FAMOS_EVAL_RAW=1`: shows every answer, and the text of an answer the app refused.
  * - `FAMOS_EVAL_VERBOSE=1`: passed to the case runner, which shows more of passed cases.
+ * - `FAMOS_EVAL_ZERO_RETENTION=0`: lets the made-up cases reach providers that keep data (the
+ *   only ones serving free models); the app itself always asks for zero retention by default.
  */
 
 /** A model's answer as a fake model replays it. */
@@ -98,6 +101,11 @@ export interface MatrixResult {
 export interface BaselineEntry {
 	label: string;
 	version: string | null;
+	/**
+	 * The fingerprint of what the model was asked in that run (the eval's `promptHash`). A test
+	 * compares it with today's, so a change to the prompt cannot go out without a new run.
+	 */
+	promptHash?: string;
 	/** YYYY-MM-DD of the run. */
 	date: string;
 	cases: number;
@@ -130,13 +138,33 @@ const OUTAGES: ReadonlySet<string> = new Set([
 
 let tags = 0;
 
+const OUTAGE_WAIT_MS = 15_000;
+/** Kept under the time a job gets, since the wait happens inside the job that made the call. */
+export const OUTAGE_WAIT_MAX_MS = 90_000;
+
 /**
  * The model of one case, recording every call: its answer, and the tokens, cost, time and
  * finish reason the adapter wrote down for it (found again by a `jobId` of its own).
+ *
+ * A call the provider could not serve (`unavailable`: a rate limit, a dropped connection) still
+ * fails, as it would at home, so the job that made it tries again after its backoff; but first
+ * the real time passes that the provider asked for, or longer after each such failure in a row.
+ * Free models' tight limits then end in an answer or in an outage, never in a failure of the
+ * model.
  */
-export function observe(env: EnvLlm, raw = false) {
+export function observe(env: EnvLlm, raw = false, wait: (ms: number) => Promise<unknown> = sleep) {
 	const calls: CallRecord[] = [];
 	const notes: string[] = [];
+	let inRow = 0;
+	const afterFailure = async (error: unknown) => {
+		if (!isLlmError(error) || error.code !== 'unavailable') return;
+		const ms = Math.min(
+			Math.max(error.retryAfterMs ?? 0, OUTAGE_WAIT_MS * 2 ** inRow++),
+			OUTAGE_WAIT_MAX_MS,
+		);
+		notes.push(`provider unavailable; waiting ${Math.round(ms / 1000)}s before the next try`);
+		await wait(ms);
+	};
 	const measured = async (jobId: string, answer: RecordedAnswer) => {
 		const rows = await env.calls(jobId);
 		calls.push({ ...sumCalls(rows), answer });
@@ -149,6 +177,7 @@ export function observe(env: EnvLlm, raw = false) {
 			const jobId = `eval_${++tags}`;
 			try {
 				const result = await env.llm.generateObject({ ...request, jobId });
+				inRow = 0;
 				if (raw) notes.push(`raw ${JSON.stringify(result.output)}`);
 				await measured(jobId, { kind: 'object', feature: request.feature, output: result.output });
 				return result;
@@ -162,6 +191,7 @@ export function observe(env: EnvLlm, raw = false) {
 					error: isLlmError(error) ? error.code : 'error',
 					...(text !== undefined && { text }),
 				});
+				await afterFailure(error);
 				throw error;
 			}
 		},
@@ -177,6 +207,7 @@ export function observe(env: EnvLlm, raw = false) {
 			}));
 			try {
 				const result = await env.llm.chat({ ...request, tools, jobId });
+				inRow = 0;
 				await measured(jobId, {
 					kind: 'chat',
 					feature: request.feature,
@@ -192,6 +223,7 @@ export function observe(env: EnvLlm, raw = false) {
 					error: isLlmError(error) ? error.code : 'error',
 					toolCalls,
 				});
+				await afterFailure(error);
 				throw error;
 			}
 		},
@@ -384,11 +416,13 @@ export function baselineEntry(
 	cells: readonly Cell[],
 	version: string | null,
 	date: string,
+	promptHash?: string,
 ): BaselineEntry {
 	const own = cells.filter((c) => c.model === totals.slug);
 	return {
 		label: totals.label,
 		version,
+		...(promptHash !== undefined && { promptHash }),
 		date,
 		cases: own.length,
 		passing: own.filter((c) => c.status === 'passed').map((c) => c.case),
@@ -445,6 +479,8 @@ export interface EvalOptions<C extends { name: string }> {
 	title: string;
 	/** The prompt version the cases ran against, kept in the baseline. */
 	version?: string;
+	/** A fingerprint of everything the model is asked, kept in the baseline and the recordings. */
+	promptHash?: string;
 	cases: readonly C[];
 	/** Runs one case on its own kernel with the given model. */
 	run(c: C, llm: LlmPort): Promise<CaseVerdict>;
@@ -454,6 +490,8 @@ export interface EvalOptions<C extends { name: string }> {
 	/** The models, instead of the ones the environment names. */
 	models?: readonly EnvLlm[];
 	log?(line: string): void;
+	/** How a wait for the provider is spent (tests pass one that returns at once). */
+	wait?(ms: number): Promise<unknown>;
 }
 
 /**
@@ -509,7 +547,7 @@ export async function runEval<C extends { name: string }>(
 		work,
 		concurrency,
 		async ({ c, model }) => {
-			const observed = observe(model, raw);
+			const observed = observe(model, raw, options.wait);
 			const verdict = await options.run(c, observed.llm).catch(
 				(error: unknown): CaseVerdict => ({
 					ok: false,
@@ -532,7 +570,7 @@ export async function runEval<C extends { name: string }>(
 				mkdirSync(folder, { recursive: true });
 				writeFileSync(
 					join(folder, `${slugOf(c.name)}.json`),
-					`${JSON.stringify({ case: c.name, model: model.label, version, answers: observed.calls.map((call) => call.answer) }, null, '\t')}\n`,
+					`${JSON.stringify({ case: c.name, model: model.label, version, ...(options.promptHash !== undefined && { promptHash: options.promptHash }), answers: observed.calls.map((call) => call.answer) }, null, '\t')}\n`,
 				);
 			}
 			return cell;
@@ -597,11 +635,17 @@ export async function runEval<C extends { name: string }>(
 			);
 		} else {
 			const date = result.at.slice(0, 10);
-			for (const t of totals)
+			for (const t of totals) {
+				// A model the provider never answered was not measured at all: what was known stays.
+				if (t.outages === t.cases) {
+					log(`Baseline of ${t.label} kept: every case was an outage.`);
+					continue;
+				}
 				baseline.models[t.slug] = withEarlierVerdicts(
-					baselineEntry(t, cells, version, date),
+					baselineEntry(t, cells, version, date, options.promptHash),
 					baseline.models[t.slug],
 				);
+			}
 			writeFileSync(baselinePath, `${JSON.stringify(baseline, null, '\t')}\n`);
 			log(`Baseline written to ${baselinePath}`);
 		}
