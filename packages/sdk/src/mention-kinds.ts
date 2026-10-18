@@ -1,6 +1,7 @@
 import type { DuplicateContext } from './actions.ts';
 import {
 	type DayRef,
+	type FieldDecision,
 	type IndexedMention,
 	MENTION_LIMIT,
 	type Mention,
@@ -117,6 +118,15 @@ export interface MentionKindDefinition {
 	 * may hand a mention to, when what the mention states is that kind's thing (`handOff`).
 	 */
 	handsOff?: readonly string[];
+	/**
+	 * The input fields (dot paths; `*` stands for an index) whose value this kind's resolver may
+	 * settle without the message writing it, and how: `defaulted` (the whole family, a default
+	 * list, today) or `inferred` (an occurrence, a date from a weekday). A kind that never does
+	 * declares `{}`. A proposal reports which of them it used in `decided`, and the host marks
+	 * those fields "check this". Optional so that existing packages stay valid; every bundled
+	 * kind declares it.
+	 */
+	decides?: Readonly<Record<string, Exclude<FieldDecision, 'written' | 'matched'>>>;
 	/**
 	 * Turns mentions of this kind, in answer order, into suggestions and refusals. Each mention
 	 * goes into exactly one resolution's `from`; one left out is refused as `incomplete`. A mention
@@ -353,4 +363,27 @@ export function unsureFields(
 		for (const name of typeof of === 'string' ? [of] : (of ?? [])) out.add(name);
 	}
 	return [...out];
+}
+
+/**
+ * Whether a shared text addresses everyone ("the whole family", "all of us"), by a catalog's
+ * comma-separated everyone-words (`ctx.vocabulary`). Whole words only, case aside. A message that
+ * does is stating the whole family, so a kind that gives an event to everyone is not guessing.
+ */
+export function addressesEveryone(
+	text: string | null,
+	everyoneWords: readonly string[],
+	locale: string,
+): boolean {
+	if (text === null) return false;
+	const split = (value: string) =>
+		value
+			.toLocaleLowerCase(locale)
+			.split(/[^\p{L}\p{N}]+/u)
+			.filter(Boolean);
+	const said = ` ${split(text).join(' ')} `;
+	return everyoneWords.some((phrase) => {
+		const words = split(phrase);
+		return words.length > 0 && said.includes(` ${words.join(' ')} `);
+	});
 }

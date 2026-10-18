@@ -2,6 +2,7 @@ import { type Mention, type Resolution, systemActor } from '@famos/sdk';
 import {
 	createTestClock,
 	createTestKernel,
+	repoTranslate,
 	resolveMentions,
 	SHARE_AI,
 	type TestKernel,
@@ -15,7 +16,11 @@ const TODAY = Date.UTC(2026, 9, 6, 10, 0);
 let k: TestKernel;
 let admin: Awaited<ReturnType<TestKernel['member']>>;
 beforeEach(async () => {
-	k = await createTestKernel({ extensions: [calendar], clock: createTestClock(TODAY) });
+	k = await createTestKernel({
+		extensions: [calendar],
+		clock: createTestClock(TODAY),
+		translate: repoTranslate(),
+	});
 	admin = await k.member('admin', 'Mara');
 });
 afterEach(() => k.close());
@@ -136,7 +141,7 @@ describe('calendar.event', () => {
 				notes: 'Bring your folder',
 			},
 			subject: 'Choir rehearsal',
-			uncertain: ['date', 'startTime', 'allDay'],
+			uncertain: ['date', 'startTime', 'allDay', 'memberIds'],
 			from: [0],
 		});
 		expect(await draft(out[0])).toBe('drafted');
@@ -220,9 +225,12 @@ describe('calendar.event', () => {
 		]);
 		expect(proposal(out[0])).toMatchObject({
 			input: { recurrence: { until: '2026-10-28' } },
-			uncertain: ['recurrence'],
+			uncertain: ['recurrence', 'memberIds'],
 		});
-		expect(proposal(out[1])).toMatchObject({ input: { date: '2026-10-15' }, uncertain: ['date'] });
+		expect(proposal(out[1])).toMatchObject({
+			input: { date: '2026-10-15' },
+			uncertain: ['date', 'memberIds'],
+		});
 	});
 
 	it('starts a series on its own weekday, and ends a counted one on its last date', async () => {
@@ -246,7 +254,7 @@ describe('calendar.event', () => {
 		// "The end of the year" names no month: the end is a guess for a person to check.
 		expect(proposal(out[1])).toMatchObject({
 			input: { date: '2026-10-20', recurrence: { freq: 'monthly', interval: 1 } },
-			uncertain: ['recurrence'],
+			uncertain: ['recurrence', 'memberIds'],
 		});
 	});
 
@@ -285,6 +293,8 @@ describe('calendar.event', () => {
 						memberIds: [],
 					},
 					subject: 'Class trip to Postojna Cave',
+					// Nobody is named: the whole family is a default, shown as "check this".
+					uncertain: ['memberIds'],
 					from: [0],
 				},
 			},
@@ -394,6 +404,28 @@ describe('calendar.event', () => {
 			input: { memberIds: [admin.member.id], date: '2026-10-10', startTime: '09:00' },
 			uncertain: ['memberIds'],
 		});
+	});
+
+	it('marks the whole family as a default only when the message does not say it', async () => {
+		const mention = { title: 'Open day', date: { text: '12 October', day: 12, month: 10 } };
+		const text = (said: string) => ({ text: said, sharer: admin.member.id });
+		const nobody = await resolve('calendar.event', [mention], text('Open day on 12 October'));
+		expect(proposal(nobody[0]).uncertain).toContain('memberIds');
+		for (const said of [
+			'Open day on 12 October, for the whole family',
+			'Everyone is invited to the open day on 12 October',
+		]) {
+			const out = await resolve('calendar.event', [mention], text(said));
+			expect(proposal(out[0])).toMatchObject({ input: { memberIds: [] } });
+			expect(proposal(out[0]).uncertain).not.toContain('memberIds');
+		}
+		// A word that only contains an everyone-word is not one.
+		const inside = await resolve(
+			'calendar.event',
+			[mention],
+			text('Open day on 12 October, everyones coat'),
+		);
+		expect(proposal(inside[0]).uncertain).toContain('memberIds');
 	});
 
 	it('reuses the family’s own tags and keeps two at most', async () => {

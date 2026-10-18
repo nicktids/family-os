@@ -1,6 +1,8 @@
 import {
+	addressesEveryone,
 	defineMentionKind,
 	endNamed,
+	type FieldDecision,
 	type Mention,
 	type MentionContext,
 	namesThing,
@@ -141,6 +143,7 @@ async function newEvent(
 	const day = mention.date ? ctx.day(mention.date, 'future', time?.time) : null;
 	let date = day?.date ?? null;
 	let doubt = day !== null && !day.certain;
+	const decided: Record<string, FieldDecision> = {};
 	let recurrence: unknown;
 	if (mention.repeat) {
 		const repeat = mention.repeat;
@@ -148,7 +151,10 @@ async function newEvent(
 			repeat.every === 'week'
 				? (repeat.weekdays ?? (mention.date?.weekday ? [mention.date.weekday] : []))
 				: [];
-		date ??= weekdays.length > 0 ? firstOfWeekdays(ctx, weekdays, time?.time) : null;
+		if (date === null && weekdays.length > 0) {
+			date = firstOfWeekdays(ctx, weekdays, time?.time);
+			decided.date = 'inferred';
+		}
 		// "Every Wednesday" names no week, but a series simply starts on the coming one.
 		if (day?.why === 'weekday_only' && weekdays.length > 0) doubt = false;
 		if (date !== null) {
@@ -162,12 +168,17 @@ async function newEvent(
 	if (date === null) {
 		return refuse('incomplete', title, [index]);
 	}
-	if (doubt) uncertain.add('date');
+	if (doubt) {
+		uncertain.add('date');
+		decided.date = 'inferred';
+	}
 	const allDay = time === null;
 	// A day without a time is an all-day event whose time a person is asked to check.
 	if (allDay) {
 		uncertain.add('startTime');
 		uncertain.add('allDay');
+		decided.startTime = 'defaulted';
+		decided.allDay = 'defaulted';
 	} else if (!time.certain) uncertain.add('startTime');
 	const endTime = allDay ? null : clockOf(mention.endTime);
 	let endDate: string | null = null;
@@ -178,6 +189,13 @@ async function newEvent(
 	}
 	const people = peopleNamed(ctx, mention);
 	if (!people.certain) uncertain.add('memberIds');
+	// Nobody named: the event is the whole family's, which is a default, unless the message says
+	// so ("everyone", "the whole family").
+	if (
+		people.ids.length === 0 &&
+		!addressesEveryone(ctx.text, ctx.vocabulary('calendar:words_everyone'), ctx.locale)
+	)
+		decided.memberIds = 'defaulted';
 
 	// The same event already on the calendar that very day (and time): leave it out.
 	const sameDay = await occurrencesBetween(ctx.db, date, date, ctx.timeZone);
@@ -223,6 +241,7 @@ async function newEvent(
 			},
 			subject: title,
 			uncertain: [...uncertain],
+			decided,
 			from: [index],
 		},
 	};
@@ -407,6 +426,13 @@ export const event = defineMentionKind({
 			why: 'The family list describes Rosa as the mother and Leo as the brother of the person who shared it: people are always given by their names from the list, never as "mum" or "brother".',
 		},
 	],
+	decides: {
+		memberIds: 'defaulted',
+		startTime: 'defaulted',
+		allDay: 'defaulted',
+		date: 'inferred',
+		recurrence: 'inferred',
+	},
 	async resolve(ctx, mentions) {
 		const known = await events(ctx.db).selectFrom('calendar_tags').select('name').execute();
 		const out: Resolution[] = [];
@@ -525,6 +551,7 @@ export const eventChange = defineMentionKind({
 			],
 		},
 	],
+	decides: { date: 'inferred', startTime: 'inferred' },
 	async resolve(ctx, mentions) {
 		const out: Resolution[] = [];
 		let known: { name: string }[] | undefined;
@@ -578,8 +605,15 @@ export const eventChange = defineMentionKind({
 				out.push(refuse('already', words, [index]));
 				continue;
 			}
-			if (change.date && day && !day.certain) uncertain.add('date');
-			if (change.startTime && time && !time.certain) uncertain.add('startTime');
+			const decided: Record<string, FieldDecision> = {};
+			if (change.date && day && !day.certain) {
+				uncertain.add('date');
+				decided.date = 'inferred';
+			}
+			if (change.startTime && time && !time.certain) {
+				uncertain.add('startTime');
+				decided.startTime = 'inferred';
+			}
 			out.push({
 				propose: {
 					actionId: 'calendar.changeEvent',
@@ -592,6 +626,7 @@ export const eventChange = defineMentionKind({
 					subject: words,
 					targetTitle: label,
 					uncertain: [...uncertain].filter((f) => f in change),
+					decided,
 					from: [index],
 				},
 			});
@@ -647,6 +682,7 @@ export const eventCancel = defineMentionKind({
 			],
 		},
 	],
+	decides: { occurrence: 'inferred' },
 	async resolve(ctx, mentions) {
 		const out: Resolution[] = [];
 		const coming = await eventsBetween(ctx, ctx.today, addDays(ctx.today, AHEAD_DAYS));
@@ -666,6 +702,7 @@ export const eventCancel = defineMentionKind({
 			const { dates, label } = found.event;
 			const first = dates[0] as Occurrence;
 			const uncertain: string[] = [];
+			const decided: Record<string, FieldDecision> = {};
 			let o = first;
 			// The event exists, on another day than the message says: told with the day it is on,
 			// in the family's formats, so the person can open it and decide.
@@ -692,7 +729,10 @@ export const eventCancel = defineMentionKind({
 						continue;
 					}
 					o = inside[0] as Occurrence;
-					if (inside.length > 1) uncertain.push('occurrence');
+					if (inside.length > 1) {
+						uncertain.push('occurrence');
+						decided.occurrence = 'inferred';
+					}
 				} else if (day) {
 					const on = dates.find((d) => startOf(d, ctx.timeZone).date === day?.date);
 					if (!on && (await skippedOn(ctx, first.eventId, day.date))) {
@@ -702,8 +742,14 @@ export const eventCancel = defineMentionKind({
 					o = on ?? nearest(dates, day.date, ctx.timeZone);
 					// A weekday alone ("thursday") names the coming date of a series on that weekday.
 					const sure = day.certain || (on !== undefined && day.why === 'weekday_only');
-					if (!on || !sure) uncertain.push('occurrence');
-				} else uncertain.push('occurrence');
+					if (!on || !sure) {
+						uncertain.push('occurrence');
+						decided.occurrence = 'inferred';
+					}
+				} else {
+					uncertain.push('occurrence');
+					decided.occurrence = 'inferred';
+				}
 			} else if (day && !within(startOf(first, ctx.timeZone).date, day)) {
 				// A single event on another day than the message says is not the one it means.
 				out.push(offDay);
@@ -728,6 +774,7 @@ export const eventCancel = defineMentionKind({
 					subject: words,
 					targetTitle: label,
 					uncertain,
+					decided,
 					from,
 				},
 			});
