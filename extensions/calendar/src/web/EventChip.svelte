@@ -1,4 +1,6 @@
 <script lang="ts">
+	import { awaitingMarkText } from '@famos/ui/famos';
+	import { Hourglass } from '@lucide/svelte';
 	import type { Occurrence } from '../contract/index.js';
 	import { isPast, stripeBackground, stripeColors } from './board.js';
 	import { timeLabel } from './format.js';
@@ -70,8 +72,13 @@
 	);
 	/** The second line: who and where; the time when neither is known. */
 	const sub = $derived([who, occurrence.location ?? ''].filter(Boolean).join(' · ') || range);
+	// A change to it that waits for approval: an hourglass before the title, and said in words.
+	const awaiting = $derived.by(() => {
+		const change = app.awaitedChange(occurrence.eventId);
+		return change ? awaitingMarkText(app, change) : null;
+	});
 	const label = $derived(
-		[next ? t('next_event') : '', occurrence.title, range, who, occurrence.location]
+		[next ? t('next_event') : '', occurrence.title, range, who, occurrence.location, awaiting]
 			.filter(Boolean)
 			.join(', '),
 	);
@@ -88,7 +95,7 @@
 	);
 	// Whether the title is wider than one line of the block: then the second line is the title's,
 	// not the time's. The block is as wide as its button; the title has what is left of its border
-	// and its padding (3 px edge side 10 px, other side 6 px).
+	// and its padding (3 px edge side 10 px, other side 6 px, or 16 beside the hourglass).
 	let button = $state<HTMLElement>();
 	let titleEl = $state<HTMLElement>();
 	let width = $state(0);
@@ -96,7 +103,7 @@
 		if (!button || !titleEl || !width || !fitsTitle) return false;
 		const style = getComputedStyle(titleEl);
 		const font = `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
-		return fitsTitle(occurrence.title, font, width - 2 * BLOCK.border - 16);
+		return fitsTitle(occurrence.title, font, width - 2 * BLOCK.border - (awaiting ? 26 : 16));
 	});
 	const fit = $derived.by(() => {
 		if (!place) return blockFit(0, 0);
@@ -119,7 +126,8 @@
 		data-long={long || undefined}
 		data-next={next || undefined}
 		aria-label={label}
-		title={meta.length < details.length ? label : undefined}
+		title={meta.length < details.length || awaiting ? label : undefined}
+		data-awaiting={awaiting ? true : undefined}
 		{onclick}
 		style:top="{place.top}px"
 		style:height="{place.height}px"
@@ -129,7 +137,9 @@
 		style:outline={next ? '2px solid var(--accent)' : undefined}
 		style:outline-offset={next ? '-2px' : undefined}
 		style:z-index={next ? 1 : undefined}
-		class="focus-visible:ring-ring absolute grid content-start overflow-hidden rounded-lg ps-2.5 pe-1.5 text-start outline-none focus-visible:z-10 focus-visible:ring-2 {long
+		class="focus-visible:ring-ring absolute grid content-start overflow-hidden rounded-lg ps-2.5 {awaiting
+			? 'pe-4'
+			: 'pe-1.5'} text-start outline-none focus-visible:z-10 focus-visible:ring-2 {long
 			? 'border-line text-ink-soft border border-dashed bg-transparent'
 			: occurrence.source
 				? 'bg-idle border-line border'
@@ -139,6 +149,10 @@
 	>
 		<span class="absolute inset-y-0 start-0 w-[3px]" style:background={edge} aria-hidden="true"
 		></span>
+		{#if awaiting}
+			<!-- In the corner, so the title keeps its lines. -->
+			<Hourglass class="text-ink-soft absolute end-1 top-1 size-3" aria-hidden="true" />
+		{/if}
 		<b
 			bind:this={titleEl}
 			class="text-[13px] font-bold {fit.titleLines === 2 ? 'line-clamp-2' : 'truncate'} {long
@@ -158,28 +172,34 @@
 		type="button"
 		data-testid="event-chip"
 		data-variant="bar"
+		data-awaiting={awaiting ? true : undefined}
 		{onclick}
 		aria-label={label}
+		title={awaiting ? label : undefined}
 		class="bg-idle focus-visible:ring-ring relative flex h-5 w-full min-w-0 items-center overflow-hidden rounded ps-2 pe-1 text-start text-xs outline-none focus-visible:ring-2 {past
 			? 'opacity-55'
 			: ''}"
 	>
 		<span class="absolute inset-y-0 start-0 w-[3px]" style:background={edge} aria-hidden="true"
 		></span>
+		{#if awaiting}<Hourglass class="text-ink-soft me-1 size-3 shrink-0" aria-hidden="true" />{/if}
 		<span class="text-ink min-w-0 flex-1 truncate font-semibold">{occurrence.title}</span>
 	</button>
 {:else}
 	<button
 		type="button"
 		data-testid="event-chip"
+		data-awaiting={awaiting ? true : undefined}
 		{onclick}
 		aria-label={label}
+		title={awaiting ? label : undefined}
 		class="hover:bg-idle focus-visible:ring-ring flex h-5 w-full min-w-0 items-center gap-1.5 rounded px-1 text-start text-xs outline-none focus-visible:ring-2 {past
 			? 'opacity-55'
 			: ''}"
 	>
 		<span class="size-2 shrink-0 rounded-full" style:background={edge} aria-hidden="true"></span>
 		<span class="text-ink-soft hidden shrink-0 tabular-nums xl:inline">{time}</span>
+		{#if awaiting}<Hourglass class="text-ink-soft size-3 shrink-0" aria-hidden="true" />{/if}
 		<span class="text-ink min-w-0 flex-1 truncate font-semibold">{occurrence.title}</span>
 	</button>
 {/if}
