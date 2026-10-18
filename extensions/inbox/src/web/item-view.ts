@@ -36,6 +36,7 @@ export interface ItemChip {
 		| 'chip_rejected'
 		| 'chip_undone'
 		| 'chip_expired'
+		| 'chip_gone'
 		| 'chip_reading'
 		| 'chip_failed'
 		| 'chip_held'
@@ -98,7 +99,10 @@ export function itemChip(item: InboxItem, drafts: readonly Draft[]): ItemChip {
 			count: applied.length,
 		};
 	if (drafts.length && drafts.every((d) => d.status === 'expired'))
-		return { tone: 'idle', key: 'chip_expired' };
+		return {
+			tone: 'idle',
+			key: drafts.every((d) => d.reason === 'gone') ? 'chip_gone' : 'chip_expired',
+		};
 	// Approved and then taken back is not the same as turned down.
 	const decided = drafts.filter((d) => d.status !== 'expired');
 	if (decided.length && decided.every((d) => d.status === 'undone'))
@@ -324,24 +328,31 @@ export function decidedRequests(
 	now: number,
 ): Draft[] {
 	if (!memberId) return [];
+	// One whose subject was deleted meanwhile closed by itself: nobody decided it, so it is dated
+	// by when it was asked.
+	const closedAt = (d: Draft) =>
+		d.reason === 'gone' && d.status === 'expired' ? d.createdAt : d.decidedAt;
 	return drafts
-		.filter(
-			(d) =>
+		.filter((d) => {
+			const at = closedAt(d);
+			return (
 				d.sourceKind !== 'inbox' &&
 				!needsAction(d) &&
-				d.decidedAt !== null &&
-				now - d.decidedAt <= DECIDED_RECENT_MS &&
-				d.decidedBy !== memberId &&
+				at !== null &&
+				now - at <= DECIDED_RECENT_MS &&
+				(d.status === 'expired' ? d.reason === 'gone' : d.decidedBy !== memberId) &&
 				d.reason !== 'withdrawn' &&
-				personBehind(d) === memberId,
-		)
-		.toSorted((a, b) => (b.decidedAt ?? 0) - (a.decidedAt ?? 0));
+				personBehind(d) === memberId
+			);
+		})
+		.toSorted((a, b) => (closedAt(b) ?? 0) - (closedAt(a) ?? 0));
 }
 
 /** The outcome chip of a decided request. */
 export function requestChip(draft: Draft): ItemChip {
 	if (draft.status === 'applied') return { tone: 'now', key: 'chip_approved' };
 	if (draft.status === 'undone') return { tone: 'idle', key: 'chip_undone' };
-	if (draft.status === 'expired') return { tone: 'idle', key: 'chip_expired' };
+	if (draft.status === 'expired')
+		return { tone: 'idle', key: draft.reason === 'gone' ? 'chip_gone' : 'chip_expired' };
 	return { tone: 'idle', key: 'chip_rejected' };
 }

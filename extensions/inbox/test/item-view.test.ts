@@ -121,6 +121,11 @@ describe('what waits for the person', () => {
 		expect(waits({}, [draft('expired')])).toBe(false);
 		expect(waits({}, [draft('expired'), draft('pending')])).toBe(true);
 		expect(itemChip(item(), [draft('expired'), draft('expired')]).key).toBe('chip_expired');
+		// Closed because what they were about is gone: it is not the day that passed.
+		const gone = { ...draft('expired'), reason: 'gone' } as Draft;
+		expect(itemChip(item(), [gone, gone]).key).toBe('chip_gone');
+		expect(itemChip(item(), [gone, draft('expired')]).key).toBe('chip_expired');
+		expect(waits({}, [gone])).toBe(false);
 		expect(itemChip(item(), [draft('expired'), draft('rejected')]).key).toBe('chip_rejected');
 		expect(itemChip(item(), [draft('expired'), draft('applied')]).key).toBe('chip_added');
 	});
@@ -397,11 +402,32 @@ describe('the person’s own requests somebody decided', () => {
 		expect(decidedRequests([mine({})], undefined, NOW)).toEqual([]);
 	});
 
+	it('lists a request whose subject was deleted, dated by when it was asked', () => {
+		const gone = { status: 'expired', reason: 'gone', decidedAt: null, decidedBy: null } as const;
+		const list = decidedRequests(
+			[
+				mine({ id: 'gone', createdAt: NOW - DAY, ...gone }),
+				mine({ id: 'too old', createdAt: NOW - 8 * DAY, ...gone }),
+				mine({ id: 'its day passed', status: 'expired', decidedAt: NOW - 1000 }),
+				mine({
+					id: 'not mine',
+					proposedBy: { kind: 'member', memberId: 'tom' },
+					createdAt: NOW,
+					...gone,
+				}),
+			],
+			'leo',
+			NOW,
+		);
+		expect(list.map((d) => d.id)).toEqual(['gone']);
+	});
+
 	it('says what became of each', () => {
 		expect(requestChip(mine({ status: 'applied' }))).toEqual({ tone: 'now', key: 'chip_approved' });
 		expect(requestChip(mine({}))).toEqual({ tone: 'idle', key: 'chip_rejected' });
 		expect(requestChip(mine({ status: 'undone' })).key).toBe('chip_undone');
 		expect(requestChip(mine({ status: 'expired' })).key).toBe('chip_expired');
+		expect(requestChip(mine({ status: 'expired', reason: 'gone' })).key).toBe('chip_gone');
 	});
 });
 
