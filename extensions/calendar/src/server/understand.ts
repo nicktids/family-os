@@ -112,6 +112,39 @@ function firstOfWeekdays(
 	return dates[0] ?? null;
 }
 
+const nameWords = (value: string, locale: string) =>
+	value
+		.toLocaleLowerCase(locale)
+		.split(/[^\p{L}\p{N}]+/u)
+		.filter((word) => [...word].length > 1);
+
+/**
+ * The one member whose whole name a new event's title writes, or else the words of the message it
+ * rests on (its quote), when the mention names nobody and the shared message writes that name
+ * too; null when none or several do, or the mention names people or the sharer itself.
+ */
+function memberWritten(ctx: MentionContext, mention: Mention): string | null {
+	if ((mention.people?.length ?? 0) > 0 || mention.forMe) return null;
+	const said = ctx.text === null ? null : new Set(nameWords(ctx.text, ctx.locale));
+	const namedIn = (value: string | undefined) => {
+		if (!value) return [];
+		const words = new Set(nameWords(value, ctx.locale));
+		return ctx.members.filter((m) => {
+			const name = nameWords(m.displayName, ctx.locale);
+			return (
+				name.length > 0 &&
+				name.every((w) => words.has(w)) &&
+				(said === null || name.some((w) => said.has(w)))
+			);
+		});
+	};
+	for (const value of [mention.title, mention.quote]) {
+		const named = namedIn(value);
+		if (named.length > 0) return named.length === 1 ? (named[0]?.id ?? null) : null;
+	}
+	return null;
+}
+
 /** Tags as the family already writes them, new ones cut to size; at most `TAGS_MAX`. */
 function tagsOf(words: readonly string[] | undefined, known: readonly { name: string }[]) {
 	const out: string[] = [];
@@ -187,7 +220,12 @@ async function newEvent(
 		if (last && last.date > date) endDate = last.date;
 		if (!last?.certain || last.date < date) uncertain.add('endDate');
 	}
-	const people = peopleNamed(ctx, mention);
+	let people = peopleNamed(ctx, mention);
+	const titled = people.ids.length === 0 ? memberWritten(ctx, mention) : null;
+	// The model wrote who it is for into the title ("Deniz vaccination appointment"), or left out
+	// the name its own words hold ("Selin's dentist appointment"): the event is theirs, as a
+	// guess for a person to check.
+	if (titled) people = { ids: [titled], certain: false, unmatched: [] };
 	if (!people.certain) uncertain.add('memberIds');
 	// Nobody named: the event is the whole family's, which is a default, unless the message says
 	// so ("everyone", "the whole family").
@@ -340,17 +378,18 @@ export const event = defineMentionKind({
 			why: 'The end is copied as its words; code works out its last day.',
 		},
 		{
-			text: 'Choir rehearsal on Thursday, bring your folder',
+			text: 'Choir concert on Thursday in the town hall. No phones during the songs, please. Bring your black folder.',
 			mentions: [
 				{
 					kind: 'calendar.event',
-					quote: 'Choir rehearsal on Thursday, bring your folder',
-					title: 'Choir rehearsal',
+					quote: 'Choir concert on Thursday in the town hall',
+					title: 'Choir concert',
 					date: { text: 'Thursday', weekday: 4 },
-					notes: 'Bring your folder',
+					place: 'Town hall',
+					notes: 'No phones during the songs. Bring your black folder.',
 				},
 			],
-			why: 'No time is written, so none is given.',
+			why: 'No time is written, so none is given. A rule for those who come and what to bring are the notes of the event.',
 		},
 		{
 			text: 'Saturday match vs Riverside: meet at the school gate 9:15, kick-off 10:00. Bring white shirt, shin pads and water.',
@@ -536,6 +575,22 @@ export const eventChange = defineMentionKind({
 				},
 			],
 			why: 'The gala is on the calendar: it moves, it is not a second gala.',
+		},
+		{
+			text: "Saturday's match against Hill Rovers is moved to Sunday 15 November at 11:00 at the north pitch (was 9:30 at the school field)",
+			mentions: [
+				{
+					kind: 'calendar.eventChange',
+					quote:
+						"Saturday's match against Hill Rovers is moved to Sunday 15 November at 11:00 at the north pitch",
+					target: 'Match against Hill Rovers',
+					date: { text: 'Sunday 15 November', day: 15, month: 11, weekday: 7 },
+					time: '11:00',
+					timeText: '11:00',
+					place: 'North pitch',
+				},
+			],
+			why: 'What it was ("was 9:30") only tells which event moves; the slots hold what is new.',
 		},
 		{
 			text: "Parents' evening will be in the school hall, starting at 19:00",

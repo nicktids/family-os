@@ -140,9 +140,12 @@ export function defineMentionKind(definition: MentionKindDefinition): MentionKin
 	return definition;
 }
 
-/** The slot of a mention field; the bookkeeping fields (`kind`, `unsure`, `quote`) have none. */
+/**
+ * The slot of a mention field; the bookkeeping fields (`kind`, `unsure`, `quote`) and the link to
+ * another mention (`detailOf`) have none.
+ */
 function slotOfField(field: string): Slot | null {
-	if (field === 'kind' || field === 'unsure' || field === 'quote') return null;
+	if (['kind', 'unsure', 'quote', 'detailOf'].includes(field)) return null;
 	if (field === 'forMe' || field === 'peopleGuessed') return 'people';
 	if (field === 'timeText') return 'time';
 	return field as Slot;
@@ -197,16 +200,21 @@ export function mentionKindProblems(
 	kind.examples.forEach((example, i) => {
 		const at = `${where}, example ${i + 1},`;
 		if (example.text.trim() === '') problems.push(`${at} has no text`);
-		for (const raw of example.mentions) {
+		example.mentions.forEach((raw, place) => {
 			const parsed = StrictMentionSchema.safeParse(raw);
 			if (!parsed.success) {
 				const issue = parsed.error.issues[0];
 				problems.push(
 					`${at} does not read as a mention: ${issue?.path.join('.') || '(mention)'}: ${issue?.message}`,
 				);
-				continue;
+				return;
 			}
 			const mention = parsed.data;
+			if (
+				mention.detailOf !== undefined &&
+				(mention.detailOf === place || mention.detailOf >= example.mentions.length)
+			)
+				problems.push(`${at} points with "detailOf" at no other mention of the example`);
 			// The model copies what the examples do: each shows the words it rests on, as written.
 			if (!mention.quote?.trim()) problems.push(`${at} has a mention without its quote`);
 			else if (!example.text.includes(mention.quote))
@@ -214,7 +222,7 @@ export function mentionKindProblems(
 			const owner = byId.get(mention.kind);
 			if (!owner) {
 				problems.push(`${at} names kind "${mention.kind}", which "${extensionId}" lacks`);
-				continue;
+				return;
 			}
 			for (const field of Object.keys(mention)) {
 				const slot = slotOfField(field);
@@ -228,7 +236,7 @@ export function mentionKindProblems(
 			}
 			if (mention.variant !== undefined && !owner.variants?.includes(mention.variant))
 				problems.push(`${at} has variant "${mention.variant}", which kind "${owner.id}" lacks`);
-		}
+		});
 	});
 	return problems;
 }
@@ -346,6 +354,25 @@ export function peopleNamed(
 		nameWords(m.displayName, ctx.locale).some((word) => said.has(word)),
 	);
 	return namesSomeone ? found : { ...found, certain: false };
+}
+
+/** A part of a text that states an amount of money: a currency sign, an amount with cents, or a currency code. */
+const MONEY = /\p{Sc}|\d[.,]\d{2}(?!\d)|\d\s?[A-Z]{3}(?![\p{L}\p{N}])/u;
+
+/**
+ * Notes without the sentences that state an amount of money, for kinds whose notes keep none
+ * (a household record's amounts are the family's to write down, never a guess copied from an
+ * invoice). Sentences are split at a full stop or a semicolon before a space, or at a line break; an amount is a
+ * currency sign, a number with two decimals ("189.00", "45,50") or a number with a three-letter
+ * code ("15 EUR"), so a mileage ("62,300 km") or a batch number stays. Empty when nothing is left.
+ */
+export function withoutAmounts(notes: string): string {
+	return notes
+		.split(/(?<=[.;]\s+|\n)(?=\S)/u)
+		.filter((part) => !MONEY.test(part))
+		.join('')
+		.replace(/[\s;]+$/u, '')
+		.trim();
 }
 
 /**

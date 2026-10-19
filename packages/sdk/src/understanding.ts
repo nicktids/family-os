@@ -59,6 +59,9 @@ export const RepeatSchema = z.object({
 });
 export type Repeat = z.infer<typeof RepeatSchema>;
 
+/** At most this many mentions are read from one answer; a longer one is a runaway answer. */
+export const MENTION_LIMIT = 16;
+
 /** One thing the message states, as the model reads it. Every field but `kind` is optional. */
 export const MentionSchema = z.object({
 	/** One of the kinds offered for this reading. */
@@ -93,6 +96,20 @@ export const MentionSchema = z.object({
 	tags: z.array(z.string().max(40)).optional(),
 	/** One of the kind's own choices (a meal slot, a treatment kind). */
 	variant: z.string().max(40).optional(),
+	/**
+	 * The place (from 0) of the mention this one is a detail of, in the same answer. The host
+	 * decides what follows: a detail with no day and no person of its own goes into the notes of
+	 * that mention, when its kind takes notes.
+	 */
+	detailOf: z
+		.number()
+		.int()
+		.min(0)
+		.max(MENTION_LIMIT - 1)
+		.optional()
+		.describe(
+			"Only for a detail of another mention of this answer (something to bring to it, a rule for it, a fee for it): that mention's place in mentions, counting from 0.",
+		),
 	/** Slots the model guessed. */
 	unsure: z.array(z.string()).optional(),
 	/**
@@ -166,9 +183,6 @@ export function refusalOf(error: { code: string; details?: unknown }): RefusalRe
 	}
 	return 'incomplete';
 }
-
-/** At most this many mentions are read from one answer; a longer one is a runaway answer. */
-export const MENTION_LIMIT = 16;
 
 /** A mention as parsed, with its place in the answer and the fields that had to be dropped. */
 export interface ParsedMention {

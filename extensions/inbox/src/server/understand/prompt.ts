@@ -16,7 +16,7 @@ import { z } from 'zod';
  */
 
 /** Bump by hand when the fixed rules or the host examples change meaningfully. */
-export const PROMPT_VERSION = 'inbox.understand/2';
+export const PROMPT_VERSION = 'inbox.understand/3';
 
 /** A kind shows at most this many of its examples; past `MANY_KINDS` kinds, `FEW_EXAMPLES`. */
 const MAX_EXAMPLES = 6;
@@ -128,6 +128,38 @@ export const HOST_EXAMPLES: readonly {
 			],
 		},
 		why: 'What to bring for something else is no note of the appointment next to it: it is its own task.',
+	},
+	{
+		text: 'Spring concert on Thursday 12 March at 18:00 in the school hall. Bring a white shirt. Return the signed photo form by Monday.',
+		answer: {
+			label: 'Spring concert',
+			intent: 'actionable',
+			mentions: [
+				{
+					kind: 'calendar.event',
+					quote: 'Spring concert on Thursday 12 March at 18:00 in the school hall',
+					title: 'Spring concert',
+					date: { text: 'Thursday 12 March', day: 12, month: 3, weekday: 4 },
+					time: '18:00',
+					timeText: '18:00',
+					place: 'School hall',
+				},
+				{
+					kind: 'lists.task',
+					quote: 'Bring a white shirt',
+					title: 'Bring a white shirt',
+					detailOf: 0,
+				},
+				{
+					kind: 'lists.task',
+					quote: 'Return the signed photo form by Monday',
+					title: 'Return the signed photo form',
+					date: { text: 'Monday', weekday: 1 },
+					detailOf: 0,
+				},
+			],
+		},
+		why: 'Details of the concert point at it with detailOf (mentions count from 0): the shirt goes into its notes, and the form, which has a day of its own, stays a task.',
 	},
 ];
 
