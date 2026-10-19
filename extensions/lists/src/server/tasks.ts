@@ -11,7 +11,15 @@ import {
 	storedAsWhole,
 	type UnitOfWork,
 } from '@famos/sdk';
-import { formatDate, IsoDateSchema, IsoTimeSchema, nextDate, todayIn, toRRule } from '@famos/time';
+import {
+	formatDate,
+	fromRRule,
+	IsoDateSchema,
+	IsoTimeSchema,
+	nextDate,
+	todayIn,
+	toRRule,
+} from '@famos/time';
 import { sql } from 'kysely';
 import { z } from 'zod';
 import {
@@ -25,7 +33,7 @@ import {
 	taskChangedPayload,
 } from '../contract/index.ts';
 import { scheduleTaskReminder } from './reminders.ts';
-import { tables, titleKey, toTask } from './store.ts';
+import { type TaskRow, tables, titleKey, toTask } from './store.ts';
 
 export const taskChanged = defineEvent('lists.task.changed', taskChangedPayload, {
 	audience: 'lists.view',
@@ -124,6 +132,26 @@ function fields(input: z.infer<typeof TaskInputSchema>) {
 	};
 }
 
+/**
+ * The columns a whole replacement of a saved task writes. What the form does not carry stays: a
+ * repeat rule outside the presets when the form says it left the repeat as it was (`keepRule`;
+ * the form cannot show such a rule, so it sends none), and the day the rule counts from while the
+ * rule and the due date are the same.
+ */
+function replacementFields(row: TaskRow, input: z.infer<typeof TaskInputSchema>, keepRule = false) {
+	const next = fields(input);
+	if (keepRule && row.rrule && !input.recurrence && !fromRRule(row.rrule, 'UTC')) {
+		next.rrule = row.rrule;
+		next.rrule_start = next.due_date;
+	}
+	const stored = row.rrule ? fromRRule(row.rrule, 'UTC') : null;
+	const sameRule =
+		next.rrule !== null &&
+		(next.rrule === row.rrule || (stored !== null && toRRule(stored, null) === next.rrule));
+	if (sameRule && next.due_date === row.due_date) next.rrule_start = row.rrule_start;
+	return next;
+}
+
 export const addTask = defineAction({
 	id: 'lists.addTask',
 	title: 'Add a task',
@@ -200,6 +228,12 @@ export const updateTask = defineAction({
 		onlyThisDate: IsoDateSchema.optional().describe(
 			'Repeating tasks: moves only the due date now up to this day (YYYY-MM-DD); the repeat and its start stay as they are. Leave out to change the task from now on',
 		),
+		keepRule: z
+			.boolean()
+			.optional()
+			.describe(
+				'True when the form left a repeat rule outside the presets as it was: the rule is kept. Without it, a task with no `recurrence` does not repeat',
+			),
 	}),
 	// Waiting from when a field left out meant empty (or its default): read that way.
 	storedInput: storedAsWhole(TaskInputSchema, 'task'),
@@ -212,7 +246,7 @@ export const updateTask = defineAction({
 	targetTitle: taskTitle,
 	// The form sends the whole task: what differs from the task as it is now is what changes, so
 	// the card lists only those fields, "old → new" (a deadline is its date and time together).
-	async currentValues(ctx, { id, task }) {
+	async currentValues(ctx, { id, task, keepRule }) {
 		const row = await tables(ctx.db)
 			.selectFrom('lists_tasks')
 			.selectAll()
@@ -220,7 +254,7 @@ export const updateTask = defineAction({
 			.where('deleted_at', 'is', null)
 			.executeTakeFirst();
 		if (!row) return null;
-		const next = fields(task);
+		const next = replacementFields(row, task, keepRule);
 		const keys: string[] = [];
 		if (row.title !== next.title) keys.push('title');
 		if (row.assignee_id !== next.assignee_id) keys.push('assigneeId');
@@ -238,15 +272,16 @@ export const updateTask = defineAction({
 		};
 		return Object.fromEntries(keys.map((k) => [k, values[k] ?? null]));
 	},
-	async run(uow, { id, task, onlyThisDate }) {
+	async run(uow, { id, task, onlyThisDate, keepRule }) {
 		const row = await load(uow, id);
 		await assertMember(uow, task.assigneeId);
 		// Only this one: the due date moves, the repeat and its start stay as they are.
-		const { rrule: _rule, rrule_start: _start, ...details } = fields(task);
+		const whole = replacementFields(row, task, keepRule);
+		const { rrule: _rule, rrule_start: _start, ...details } = whole;
 		const patch =
 			onlyThisDate && row.rrule
 				? { ...details, due_date: onlyThisDate, due_time: task.dueTime ?? null }
-				: fields(task);
+				: whole;
 		await tables(uow.db)
 			.updateTable('lists_tasks')
 			.set({ ...patch, updated_at: uow.clock.now() })

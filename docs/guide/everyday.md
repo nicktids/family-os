@@ -99,6 +99,8 @@ Tap an event to change it, or to **Delete** it (then **Tap again to delete**). E
 - **Delete only this one** (then **Tap again to skip this one**): skips that day; the rest stay.
 - **Delete whole series** (then **Tap again to delete all**).
 
+Saving a change to the whole series keeps the days you skipped and the days you moved with **Only this one**. If you move the series to another day or time, skipped days that the new repeat still has stay skipped, and the others are forgotten. A repeat the form cannot show (shown as **Custom rule**, for example from an imported calendar) stays when you save other changes, and **Does not repeat** stops it. The event's own time zone stay as they were unless you change its date or time.
+
 ### Reminders and tags
 
 A timed event reminds you 30 minutes before, an all-day event at 09:00 on the day. Change it under **Reminder**, or choose **No reminder**. Up to 5 **Tags** can go on an event, such as school or health. Reminders, tags, and the calendar on your phone or other calendars are in [Calendars](calendars.md).
