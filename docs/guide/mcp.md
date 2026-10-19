@@ -1,5 +1,7 @@
 # Bring your own agent (MCP)
 
+> Home Assistant, a script or another program that is not an AI agent connects as a [connected app](connected-apps.md) instead, on the same page.
+
 If you already use a personal AI agent, such as Hermes Agent by Nous Research, Claude Desktop, Claude Code or another app that supports the **Model Context Protocol (MCP)**, you can connect it to FamilyOS instead of using the built-in [assistant](assistant.md). Then you can ask your agent "what is on the calendar this week?" or "put milk on the shopping list" from wherever you already talk to it.
 
 **It has exactly the powers of the [assistant](assistant.md), and no more.** The agent sees only what you may see, and only in the areas the family has opened to the AI. Every change it proposes is a *suggestion* that you approve in FamilyOS, like everything else the AI does. It cannot send anything outside, and it cannot do what you cannot do.
@@ -10,7 +12,7 @@ FamilyOS does not talk to other agents on its own (the "agent-to-agent" kind of 
 
 ## Turn it on
 
-AI apps cannot connect until an admin allows it: **Settings → You → Connected apps**, then **Allow AI apps to connect** (under **For the whole family**). FamilyOS asks you to confirm first, and after you turn it on or off a notice offers **Undo**. The assistant's page links here too (**Use your own AI agent**), and so does **Settings → AI → Usage & limits**. While it is off, no app key works.
+AI apps cannot connect until an admin allows it: **Settings → You → Connected apps**, then **Allow AI apps to connect** (under **AI apps, for the whole family**). FamilyOS asks you to confirm first, and after you turn it on or off a notice offers **Undo**. The assistant's page links here too (**Use your own AI agent**), and so does **Settings → AI → Usage & limits**. While it is off, no AI app key works; [apps and scripts](connected-apps.md) are not affected.
 
 Who may create app keys is a permission, **Connect AI apps with their own app key**. Admins and members have it by default; supervised members and guests do not. An app key lets an app the family did not choose read everything its holder can see and send it to that app's own AI provider, which the family's AI settings do not cover, so children do not get it unless an admin decides so. Change it per role in **Settings → Family → Roles**; a key someone already made stops working as soon as their role no longer has the permission. Keys can only be made after signing in with your password: someone who signed in with a PIN on a shared family device sees a note instead of the button. A key also stops when its owner signs out everywhere, gets a new password or is archived.
 
