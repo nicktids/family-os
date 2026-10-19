@@ -1,5 +1,5 @@
 {
-	"sdk": "0.8.13",
+	"sdk": "0.8.14",
 	"svelte": "5.57",
 	"zod": "4",
 	"kysely": "0.29",
@@ -337,6 +337,7 @@
 			"pillOf",
 			"pillText",
 			"readFirst",
+			"removeLabels",
 			"sharedRead",
 			"shortName",
 			"showCountdown",
