@@ -1,5 +1,5 @@
 {
-	"sdk": "0.8.14",
+	"sdk": "0.8.15",
 	"svelte": "5.57",
 	"zod": "4",
 	"kysely": "0.29",
@@ -7,6 +7,7 @@
 		"@famos/sdk": [
 			"AI_AREA_ACCESS",
 			"AI_MODES",
+			"ANY_MEMBER",
 			"ActorSchema",
 			"AiContextSchema",
 			"BUILT_IN_ROLES",
@@ -22,6 +23,7 @@
 			"DigestItemSchema",
 			"DigestOutputSchema",
 			"ERROR_HTTP_STATUS",
+			"EVERYONE",
 			"EXTERNAL_HTTP_MAX_POST_BYTES",
 			"ExtensionManifestSchema",
 			"ExternalHttpError",
