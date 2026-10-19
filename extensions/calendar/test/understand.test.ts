@@ -556,6 +556,86 @@ describe('calendar.eventChange', () => {
 	});
 });
 
+describe('calendar.eventChange of a repeating event with a date moved out of it', () => {
+	/** Weekly swimming on Wednesdays 16:30; the one of 7 October moved to Thursday 8 October. */
+	async function swimmingWithMovedDate() {
+		const series = await addEvent({
+			title: 'Leo swimming',
+			date: '2026-10-07',
+			startTime: '16:30',
+			recurrence: { freq: 'weekly', byDay: ['WE'] },
+		});
+		const moved = await k.runner.invoke<{ id: string }>(
+			'calendar.changeEvent',
+			{ id: series.id, occurrence: '2026-10-07', date: '2026-10-08', startTime: '16:30' },
+			admin.actor,
+		);
+		if (moved.status !== 'applied') throw new Error('expected the date to move');
+		return series;
+	}
+
+	it('moves the date of this week, not the series next week (the exact answer a model gave)', async () => {
+		const series = await swimmingWithMovedDate();
+		const out = await resolve(
+			'calendar.eventChange',
+			[
+				{
+					target: 'Leo swimming',
+					date: { text: 'Thursday', weekday: 4 },
+					time: '17:00',
+					timeText: '5pm',
+				},
+			],
+			{ text: 'Leo swimming moved to Thursday 5pm this week' },
+		);
+		const p = proposal(out[0]);
+		expect(p.actionId).toBe('calendar.changeEvent');
+		const input = p.input as Record<string, unknown>;
+		expect(input).toMatchObject({ startTime: '17:00' });
+		expect(input.id).not.toBe(series.id);
+		expect(input).not.toHaveProperty('occurrence');
+		expect(p.uncertain).toContain('id');
+	});
+
+	it('says which days the equally named events are on when nothing tells them apart', async () => {
+		await swimmingWithMovedDate();
+		const out = await resolve(
+			'calendar.eventChange',
+			[{ target: 'Leo swimming', time: '17:00', timeText: '5pm' }],
+			{ text: 'Leo swimming moved to 5pm' },
+		);
+		expect(out).toEqual([
+			{
+				refuse: {
+					reason: 'ambiguous',
+					subject: 'Leo swimming (Thu, Oct 8 / Wed, Oct 14)',
+					from: [0],
+				},
+			},
+		]);
+	});
+});
+
+describe('a day in the quote of a change', () => {
+	it('names which date, so it is not read as the new date (answer with no date)', async () => {
+		const training = await footballTraining();
+		const out = await resolve('calendar.eventChange', [
+			{
+				target: 'Football training',
+				time: '18:00',
+				timeText: '18:00',
+				quote: "Friday's football training is now at 18:00",
+			},
+		]);
+		const input = proposal(out[0]).input as Record<string, unknown>;
+		expect(input).toEqual({
+			id: training.id,
+			startTime: '18:00',
+			label: 'Football training',
+		});
+	});
+});
+
 describe('calendar.eventCancel', () => {
 	it('never cancels another class’s trip because most of its words are the same', async () => {
 		// Before one matcher decided it, "Class 3B trip" named all the words of "Class 1B trip"

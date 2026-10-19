@@ -23,7 +23,15 @@ import {
 	type SettledResolution,
 	type TargetResult,
 } from '@famos/sdk';
-import { clockTimes, dateWords, numericDateOrder, resolveDay, todayIn, zoned } from '@famos/time';
+import {
+	clockTimes,
+	dateWords,
+	dayNamedIn,
+	numericDateOrder,
+	resolveDay,
+	todayIn,
+	zoned,
+} from '@famos/time';
 import type { Registry } from './registry.ts';
 
 export interface MentionKindsDeps {
@@ -324,6 +332,34 @@ export function createMentionKinds(deps: MentionKindsDeps): MentionKinds {
 					return { propose: { ...r.propose, uncertain } };
 				});
 
+	/**
+	 * A mention of a kind with a day that comes without one, but whose own quote names exactly one,
+	 * is read with that day, as a guess (a person checks it): the model left out what the words
+	 * say. A quote that names two days names none.
+	 */
+	const withQuotedDay = (
+		kind: MentionKindDefinition,
+		given: IndexedMention,
+		formatLocale: string,
+	): IndexedMention => {
+		const { mention } = given;
+		const quote = mention.quote?.trim();
+		// A kind with a `target` changes or cancels something that exists: a day in its quote
+		// usually says which one, not a new date, so it is never read as the date.
+		if (kind.slots.date === undefined || kind.slots.target !== undefined) return given;
+		if (mention.date || !quote) return given;
+		const named = dayNamedIn(quote, dateWords(deps.vocabulary), numericDateOrder(formatLocale));
+		if (!named) return given;
+		return {
+			index: given.index,
+			mention: {
+				...mention,
+				date: { text: quote, ...named },
+				unsure: [...new Set([...(mention.unsure ?? []), 'date'])],
+			},
+		};
+	};
+
 	/** A kind's resolver on some of its mentions, its answer held to them. */
 	const run = async (
 		owned: OwnedKind,
@@ -335,7 +371,9 @@ export function createMentionKinds(deps: MentionKindsDeps): MentionKinds {
 		const guessed = new Set<string>();
 		if (given.length > 0) {
 			try {
-				const out: unknown = await kind.resolve(await contextFor(extension, env, guessed), given);
+				const settings = await deps.family.settings();
+				const dated = given.map((m) => withQuotedDay(kind, m, settings.formatLocale));
+				const out: unknown = await kind.resolve(await contextFor(extension, env, guessed), dated);
 				if (Array.isArray(out)) returned = out;
 				else deps.logger.warn({ kind: kind.id }, 'a resolver returned no list');
 			} catch (error) {
