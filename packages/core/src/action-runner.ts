@@ -460,6 +460,7 @@ export function createActionRunner(deps: ActionRunnerDeps): ActionRunner {
 		db: deps.views.db(ownerOf(def.id), db),
 		family: familyReader(db),
 		translate: deps.translate,
+		vocabulary: deps.vocabulary,
 		now: deps.clock.now(),
 	});
 
@@ -1177,6 +1178,7 @@ export function createActionRunner(deps: ActionRunnerDeps): ActionRunner {
 								db: view(ownerOf(def.id)).db,
 								family: uow.family,
 								translate: deps.translate,
+								vocabulary: deps.vocabulary,
 								now: clock.now(),
 							},
 							input,
