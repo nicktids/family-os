@@ -1,5 +1,9 @@
 # syntax=docker/dockerfile:1.7
 FROM node:24-bookworm-slim
+# Native CLIs use the system trust store; Node's bundled roots do not cover them.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 # Both CLIs and Zod are pinned with integrity hashes, including native platform packages.
 COPY tools/cli-bridge/runtime/package.json tools/cli-bridge/runtime/package-lock.json ./

@@ -1838,6 +1838,50 @@ describe('chat with tools', () => {
 });
 
 describe('subscription bridge with the real FamilyOS model adapter', () => {
+	it('distinguishes a mismatched bridge key from missing CLI logins without inference', async () => {
+		const key = 'test-only-private-bridge-key-32-characters';
+		let signedIn = false;
+		let inferences = 0;
+		const bridge = createBridge(
+			{ key, models: ['codex/default', 'claude/default'] },
+			{
+				authenticated: async (backend) => backend === 'codex' && signedIn,
+				infer: async () => {
+					inferences++;
+					return { text: 'unused' };
+				},
+			},
+		);
+		await new Promise<void>((resolve) => bridge.listen(0, '127.0.0.1', resolve));
+		try {
+			const provider = await settings.createProvider({
+				name: 'Subscription',
+				kind: 'cli-bridge',
+				baseUrl: `http://127.0.0.1:${(bridge.address() as AddressInfo).port}/v1`,
+				apiKey: 'wrong-key',
+			});
+			expect(await settings.listModels(provider.id)).toMatchObject({
+				ok: false,
+				reason: 'bridge_key',
+			});
+			await settings.updateProvider(provider.id, { apiKey: key });
+			expect(await settings.listModels(provider.id)).toMatchObject({
+				ok: false,
+				reason: 'cli_login',
+			});
+			signedIn = true;
+			expect(await settings.listModels(provider.id)).toEqual({
+				ok: true,
+				models: ['codex/default'],
+			});
+			expect(inferences).toBe(0);
+		} finally {
+			await new Promise<void>((resolve) => {
+				bridge.close(() => resolve());
+				bridge.closeAllConnections();
+			});
+		}
+	});
 	it('runs a host-owned tool loop over bridge SSE and validates structured extraction', async () => {
 		const key = 'test-only-private-bridge-key-32-characters';
 		let reads = 0;

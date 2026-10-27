@@ -85,10 +85,21 @@ docker compose -f docker-compose.yml -f docker-compose.build.yml -f docker-compo
 docker compose -f docker-compose.yml -f docker-compose.build.yml -f docker-compose.cli.yml exec cli-bridge claude auth status
 ```
 
-The container health check tests the bridge process, not subscription access. A provider's connection test checks login status; only an actual chat can verify model access. An expired login asks you to sign in again. An exhausted subscription reports a usage limit; temporary rate limits and a busy bridge can be retried. A network or native CLI failure returns a sanitized error.
+The container health check tests the bridge process, not subscription access. A provider's connection test checks login status; only an actual chat can verify model access. The connection test checks the bridge key separately from the native CLI logins: a key mismatch asks you to synchronize the provider key and secret file, while missing CLI logins ask you to sign in inside the bridge container. Host-machine CLI logins do not sign the container in. An expired login asks you to sign in again. An exhausted subscription reports a usage limit; temporary rate limits and a busy bridge can be retried. A network or native CLI failure returns a sanitized error.
 
 CLI versions are pinned in `tools/cli-bridge/runtime/package.json` and its npm lockfile, including the native platform packages. To upgrade, change the pins deliberately, regenerate that lockfile (`npm install --package-lock-only --ignore-scripts --prefix tools/cli-bridge/runtime`), rebuild, then verify text chat, JSON output, tool proposals, login persistence and the absence of native tool execution with each CLI. `FAMOS_CLI_TIMEOUT_MS` can lower the bridge's 120-second ceiling; the FamilyOS job's own timeout can stop it earlier. The bridge permits two concurrent CLI processes by default.
 
 To sign out, run `codex logout` or `claude auth logout` with `exec cli-bridge`. Removing the optional service does not delete its credentials. Avoid `docker compose down -v`: it would also delete your family's main data volume.
 
 Provider references: [Codex non-interactive usage](https://learn.chatgpt.com/docs/noninteractive), [Codex authentication](https://learn.chatgpt.com/docs/auth), [Claude Code CLI](https://code.claude.com/docs/en/cli-reference), [Claude Code authentication](https://code.claude.com/docs/en/authentication).
+
+### Device login cannot send its HTTPS request
+
+If `codex login --device-auth` fails while requesting a code from `auth.openai.com`, it has not reached account sign-in yet. The bridge image must contain the system `ca-certificates` bundle for the native CLI; Node's own bundled certificates are separate. Rebuild the updated bridge image and recreate its container, keeping its login volume:
+
+```sh
+docker compose -f docker-compose.yml -f docker-compose.build.yml -f docker-compose.cli.yml build cli-bridge
+docker compose -f docker-compose.yml -f docker-compose.build.yml -f docker-compose.cli.yml up -d --force-recreate cli-bridge
+```
+
+Include your port override file too if you use one. Then retry login. If the error remains, check container DNS, outbound HTTPS, and whether your network requires a proxy or a custom CA. Do not disable certificate verification. A working HTTPS request in Node alone does not establish that the native CLI has a working trust store.

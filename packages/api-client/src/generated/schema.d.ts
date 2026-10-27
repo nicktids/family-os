@@ -4353,7 +4353,7 @@ export interface operations {
                         /** @enum {boolean} */
                         ok: false;
                         /** @enum {string} */
-                        reason: "auth" | "unreachable" | "unexpected";
+                        reason: "auth" | "bridge_key" | "cli_login" | "unreachable" | "unexpected";
                         message: string;
                     };
                 };

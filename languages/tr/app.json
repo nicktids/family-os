@@ -415,6 +415,8 @@
 	"ai_testing": "Deneniyor…",
 	"ai_test_ok_one": "Bağlandı · {{count}} model",
 	"ai_test_ok_other": "Bağlandı · {{count}} model",
+	"ai_test_cli_login": "Köprü anahtarı çalışıyor. Köprü konteynerinde Codex veya Claude Code oturumu açın, ardından tekrar deneyin.",
+	"ai_test_bridge_key": "Köprü anahtarları eşleşmiyor. FamilyOS sağlayıcı anahtarını ve köprünün gizli anahtar dosyasını aynı değere ayarlayın, ardından her iki konteyneri yeniden oluşturun.",
 	"ai_test_auth": "Sağlayıcı anahtarı kabul etmedi.",
 	"ai_test_unreachable": "Bu adrese ulaşılamadı.",
 	"ai_test_unexpected": "Beklenmeyen yanıt: {{message}}",
