@@ -85,7 +85,7 @@ export const ModelListSchema = z.discriminatedUnion('ok', [
 	}),
 	z.object({
 		ok: z.literal(false),
-		reason: z.enum(['auth', 'unreachable', 'unexpected']),
+		reason: z.enum(['auth', 'bridge_key', 'cli_login', 'unreachable', 'unexpected']),
 		message: z.string(),
 	}),
 ]);

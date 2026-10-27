@@ -3661,6 +3661,8 @@
 													"type": "string",
 													"enum": [
 														"auth",
+														"bridge_key",
+														"cli_login",
 														"unreachable",
 														"unexpected"
 													]

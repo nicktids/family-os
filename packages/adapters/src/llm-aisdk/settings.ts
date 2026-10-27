@@ -11,6 +11,7 @@ import {
 } from '@famos/sdk';
 import { Temporal } from '@famos/time';
 import { sql } from 'kysely';
+import { z } from 'zod';
 import { defaultResolver, isLocalAddress, type Resolver } from '../http-guard/index.ts';
 import type { SecretBox } from './crypto.ts';
 import {
@@ -419,7 +420,39 @@ export function createAiSettings(deps: AiSettingsDeps) {
 				reason: 'auth',
 				message: `The provider refused the key (HTTP ${status})`,
 			});
+			// The status probe and model list share one deadline for the CLI bridge.
+			const cliSignal = provider.kind === 'cli-bridge' ? AbortSignal.timeout(10_000) : undefined;
 			try {
+				if (provider.kind === 'cli-bridge') {
+					const status = await doFetch(`${provider.baseUrl}/status`, {
+						headers,
+						signal: cliSignal,
+					});
+					if (status.status === 401 || status.status === 403)
+						return {
+							ok: false,
+							reason: 'bridge_key',
+							message: 'The FamilyOS bridge key does not match the mounted secret.',
+						};
+					if (!status.ok)
+						return { ok: false, reason: 'unexpected', message: `HTTP ${status.status}` };
+					const parsed = z
+						.object({ authenticated: z.record(z.string(), z.boolean()) })
+						.safeParse(await status.json());
+					if (!parsed.success || Object.keys(parsed.data.authenticated).length === 0)
+						return {
+							ok: false,
+							reason: 'unexpected',
+							message: 'The CLI bridge returned an invalid login status.',
+						};
+					if (!Object.values(parsed.data.authenticated).some(Boolean))
+						return {
+							ok: false,
+							reason: 'cli_login',
+							message:
+								'The bridge key works. Sign in to Codex or Claude Code inside the bridge container.',
+						};
+				}
 				// OpenRouter lists models without a key, so check the key itself first.
 				if (provider.kind === 'openrouter') {
 					const key = await doFetch(`${provider.baseUrl}/key`, {
@@ -430,7 +463,7 @@ export function createAiSettings(deps: AiSettingsDeps) {
 				}
 				const response = await doFetch(`${provider.baseUrl}/models`, {
 					headers,
-					signal: AbortSignal.timeout(10_000),
+					signal: cliSignal ?? AbortSignal.timeout(10_000),
 				});
 				if (response.status === 401 || response.status === 403) return refused(response.status);
 				if (!response.ok)

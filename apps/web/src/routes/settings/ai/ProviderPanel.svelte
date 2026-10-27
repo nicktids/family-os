@@ -285,6 +285,10 @@
 						<Notice tone={test.ok ? 'info' : 'warn'}>
 							{#if test.ok}
 								{t('ai_test_ok', { count: test.models.length })}
+							{:else if test.reason === 'cli_login'}
+								{t('ai_test_cli_login')}
+							{:else if test.reason === 'bridge_key'}
+								{t('ai_test_bridge_key')}
 							{:else if test.reason === 'auth'}
 								{t('ai_test_auth')}
 							{:else if test.reason === 'unreachable'}

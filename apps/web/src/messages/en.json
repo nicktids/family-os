@@ -415,6 +415,8 @@
 	"ai_testing": "Testing…",
 	"ai_test_ok_one": "Connected · {{count}} model",
 	"ai_test_ok_other": "Connected · {{count}} models",
+	"ai_test_cli_login": "The bridge key works. Sign in to Codex or Claude Code inside the bridge container, then test again.",
+	"ai_test_bridge_key": "The bridge keys do not match. Set the FamilyOS provider key and the bridge secret file to the same value, then recreate both containers.",
 	"ai_test_auth": "The provider refused the key.",
 	"ai_test_unreachable": "Could not reach this address.",
 	"ai_test_unexpected": "Unexpected answer: {{message}}",
