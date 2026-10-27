@@ -15,6 +15,7 @@ Admins only.
 |---|---|---|
 | OpenRouter | Cloud models, pay per use | API key from openrouter.ai. Cost tracked per call. Has free models |
 | Ollama (local) | Nothing leaves home | Needs a capable machine (not a Raspberry Pi). Start: `docker compose --profile ollama up -d`; **Address** `http://ollama:11434/v1` |
+| CLI subscriptions | Your Codex or Claude Code CLI login | Optional Docker companion; text only, cloud inference. See [CLI subscriptions](cli-subscriptions.md) |
 | OpenAI-compatible | LM Studio, vLLM, OpenAI, hosted APIs | **Address** and **API key** |
 
 | Role | For | Notes |
@@ -57,7 +58,7 @@ JPEG, PNG, WebP and GIF pictures lose location and other metadata (EXIF, XMP, IP
 | **Any provider** | Any provider you added |
 
 **Good to know**
-- Areas with private records are marked **Private records** and start **Off**; others start **Any provider**. A provider is local when its address resolves only to your machine or home network.
+- Areas with private records are marked **Private records** and start **Off**; others start **Any provider**. A provider is local when its address resolves only to your machine or home network, except CLI subscriptions: their local bridge forwards to cloud models and is always non-local.
 - Opening a sensitive area to **Any provider** asks you to confirm (**Allow any provider**); **Local only** does not.
 - Only areas on in **Settings → Family → Extensions** and with AI actions are listed (sensitive ones always).
 - **Locking an area hides its duties and papers.** Records' duties and papers belong to their vehicle, pet or home: **Vehicles** **Off** hides "Car insurance (Family car)" and papers under Family car; same for pets and home. Papers you filed yourself with **Add to…** are never shown to the AI. Pages, reminders and papers still work for the family.

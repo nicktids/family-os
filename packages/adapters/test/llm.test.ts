@@ -4,6 +4,7 @@ import { openDatabase, runMigrations } from '@famos/db';
 import { type AiAreaAccess, LlmError, type LlmPort } from '@famos/sdk';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
+import { createBridge } from '../../../tools/cli-bridge/src/server.ts';
 import {
 	type AiSettingsService,
 	aiMigrations,
@@ -1443,6 +1444,35 @@ describe('AI areas and local models', () => {
 		expect(seen).toHaveLength(0);
 	});
 
+	it('treats the subscription CLI bridge as cloud inference even on loopback', async () => {
+		const provider = await settings.createProvider({
+			name: 'CLI bridge',
+			kind: 'cli-bridge',
+			baseUrl,
+		});
+		const roles = (await settings.get()).roles;
+		await settings.setRoles({
+			...roles,
+			smart: { providerId: provider.id, model: 'codex/default' },
+		});
+		expect((await settings.get()).providers.find((p) => p.id === provider.id)).toMatchObject({
+			local: false,
+		});
+		expect(await llm.policy('test.extract', 'smart')).toMatchObject({ local: false });
+		areas.vault = 'local';
+		await expect(
+			llm.generateObject({
+				role: 'smart',
+				feature: 'test.extract',
+				areas: ['vault'],
+				schema: Trip,
+				prompt: 'private',
+				timeoutMs: CALL_TIMEOUT_MS,
+			}),
+		).rejects.toMatchObject({ code: 'local_required', retryable: false });
+		expect(seen).toHaveLength(0);
+	});
+
 	it('allows a local-only area on a local provider, whatever its kind', async () => {
 		// The stand-in server listens on loopback: a local address, though the kind is OpenRouter.
 		await useModel('priced', 'openrouter');
@@ -1804,5 +1834,84 @@ describe('chat with tools', () => {
 		expect((await usage())[0]).toMatchObject({ error_code: 'unavailable' });
 
 		await expect(chat({ timeoutMs: 50 }).run).rejects.toMatchObject({ code: 'timeout' });
+	});
+});
+
+describe('subscription bridge with the real FamilyOS model adapter', () => {
+	it('runs a host-owned tool loop over bridge SSE and validates structured extraction', async () => {
+		const key = 'test-only-private-bridge-key-32-characters';
+		let reads = 0;
+		let inferences = 0;
+		const bridge = createBridge(
+			{ key, models: ['codex/default'] },
+			{
+				authenticated: async () => true,
+				infer: async (_backend, _model, prepared) => {
+					inferences++;
+					if (prepared.tools.length)
+						return {
+							text: JSON.stringify({
+								text: '',
+								tool_calls: [{ name: 'family_lookup', arguments: '{}' }],
+							}),
+							inputTokens: 4,
+							outputTokens: 2,
+						};
+					if (prepared.prompt.includes('School trip Friday'))
+						return { text: JSON.stringify({ title: 'School trip', date: '2026-11-06' }) };
+					expect(prepared.prompt).toContain('HOST_ONLY_FACT');
+					return {
+						text: 'The host checked your family information.',
+						inputTokens: 5,
+						outputTokens: 3,
+					};
+				},
+			},
+		);
+		await new Promise<void>((resolve) => bridge.listen(0, '127.0.0.1', resolve));
+		try {
+			const provider = await settings.createProvider({
+				name: 'Subscription',
+				kind: 'cli-bridge',
+				baseUrl: `http://127.0.0.1:${(bridge.address() as AddressInfo).port}/v1`,
+				apiKey: key,
+			});
+			await settings.setRoles({
+				...(await settings.roles()),
+				smart: { providerId: provider.id, model: 'codex/default' },
+			});
+			const result = await llm.chat({
+				role: 'smart',
+				feature: 'test.chat',
+				areas: ['test'],
+				messages: [{ role: 'user', content: 'Read the family information' }],
+				tools: [
+					{
+						name: 'family_lookup',
+						description: 'Read family information',
+						inputSchema: { type: 'object', properties: {} },
+						execute: async () => {
+							reads++;
+							return 'HOST_ONLY_FACT';
+						},
+					},
+				],
+				maxSteps: 2,
+				timeoutMs: CALL_TIMEOUT_MS,
+			});
+			expect(reads).toBe(1);
+			expect(result).toMatchObject({
+				text: 'The host checked your family information.',
+				toolCalls: [{ name: 'family_lookup', ok: true }],
+				usage: { inputTokens: 9, outputTokens: 5, cost: null },
+			});
+			expect(await ask()).toMatchObject({ output: { title: 'School trip', date: '2026-11-06' } });
+			expect(inferences).toBe(3);
+		} finally {
+			await new Promise<void>((resolve) => {
+				bridge.close(() => resolve());
+				bridge.closeAllConnections();
+			});
+		}
 	});
 });

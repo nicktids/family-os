@@ -2800,7 +2800,8 @@
 														"enum": [
 															"openrouter",
 															"ollama",
-															"openai-compatible"
+															"openai-compatible",
+															"cli-bridge"
 														]
 													},
 													"baseUrl": {
@@ -3322,7 +3323,8 @@
 											"enum": [
 												"openrouter",
 												"ollama",
-												"openai-compatible"
+												"openai-compatible",
+												"cli-bridge"
 											]
 										},
 										"baseUrl": {
@@ -50319,7 +50321,8 @@
 										"enum": [
 											"openrouter",
 											"ollama",
-											"openai-compatible"
+											"openai-compatible",
+											"cli-bridge"
 										]
 									},
 									"baseUrl": {
@@ -50366,7 +50369,8 @@
 															"enum": [
 																"openrouter",
 																"ollama",
-																"openai-compatible"
+																"openai-compatible",
+																"cli-bridge"
 															]
 														},
 														"baseUrl": {
@@ -50745,7 +50749,8 @@
 																	"enum": [
 																		"openrouter",
 																		"ollama",
-																		"openai-compatible"
+																		"openai-compatible",
+																		"cli-bridge"
 																	]
 																},
 																"baseUrl": {

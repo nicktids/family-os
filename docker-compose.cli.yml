@@ -1,0 +1,44 @@
+# Build this fork's FamilyOS image: its cli-bridge provider enforces cloud privacy rules.
+# docker compose -f docker-compose.yml -f docker-compose.build.yml -f docker-compose.cli.yml up -d --build
+services:
+  famos:
+    environment:
+      FAMOS_AI_PROVIDER: cli-bridge
+      FAMOS_AI_BASE_URL: http://cli-bridge:8787/v1
+      FAMOS_AI_API_KEY: ${FAMOS_CLI_BRIDGE_KEY:?Set FAMOS_CLI_BRIDGE_KEY in .env first}
+      # Only text roles: keep Vision, Speech to text and Search on separate providers.
+      FAMOS_AI_MODEL_SMART: ${FAMOS_CLI_MODEL:-codex/default}
+      FAMOS_AI_MODEL_FAST: ${FAMOS_CLI_MODEL:-codex/default}
+    depends_on:
+      cli-bridge:
+        condition: service_healthy
+
+  cli-bridge:
+    build:
+      context: .
+      dockerfile: docker/cli-bridge.Dockerfile
+    image: familyos-cli-bridge:local
+    init: true
+    # No host ports and no FamilyOS data mount. Logins are isolated from the host's own CLIs.
+    volumes:
+      - cli-auth:/home/node
+    secrets:
+      - cli_bridge_key
+    environment:
+      CODEX_MODELS: ${FAMOS_CODEX_MODELS:-default}
+      CLAUDE_MODELS: ${FAMOS_CLAUDE_MODELS:-default}
+      FAMOS_CLI_TIMEOUT_MS: ${FAMOS_CLI_TIMEOUT_MS:-120000}
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+      - /work:size=1m,uid=1000,gid=1000,mode=0700
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    restart: unless-stopped
+
+secrets:
+  cli_bridge_key:
+    environment: FAMOS_CLI_BRIDGE_KEY
+
+volumes:
+  cli-auth:

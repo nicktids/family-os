@@ -10,7 +10,7 @@ import type {
 } from '@famos/sdk';
 import { LlmError } from '@famos/sdk';
 import { sql } from 'kysely';
-import { type AiSettingsService, monthBounds } from '../settings.ts';
+import { type AiSettingsService, monthBounds, type ResolvedProvider } from '../settings.ts';
 import { aiTables } from '../tables.ts';
 import {
 	type EmbeddingFactory,
@@ -79,13 +79,13 @@ export function createCalls(deps: AiSdkLlmDeps) {
 	}
 
 	/** The area rules for one call; the first area that is closed decides. */
-	async function checkAreas(areas: readonly string[], baseUrl: string) {
+	async function checkAreas(areas: readonly string[], provider: ResolvedProvider) {
 		let local: boolean | undefined;
 		for (const area of new Set(areas)) {
 			const access = deps.areaAccess(area);
 			if (access === 'off') throw new LlmError('disabled', `AI access to ${area} is off`);
 			if (access === 'local') {
-				local ??= await deps.settings.isLocal(baseUrl);
+				local ??= await deps.settings.isLocal(provider.baseUrl, provider.kind);
 				if (!local)
 					throw new LlmError(
 						'local_required',
@@ -186,7 +186,7 @@ export function createCalls(deps: AiSdkLlmDeps) {
 			sendFiles,
 			sendPeople,
 			sendVoice,
-			local: resolved ? await deps.settings.isLocal(resolved.baseUrl) : false,
+			local: resolved ? await deps.settings.isLocal(resolved.baseUrl, resolved.kind) : false,
 			model: role && resolved ? `${resolved.id}:${role.model}` : null,
 		};
 	}

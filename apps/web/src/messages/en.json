@@ -388,6 +388,8 @@
 	"ai_providers": "Providers",
 	"ai_no_providers": "No AI service yet. Add one to start.",
 	"ai_add_provider": "Add provider",
+	"ai_kind_cli-bridge": "CLI subscriptions",
+	"ai_kind_hint_cli-bridge": "Codex or Claude Code through your Docker CLI bridge. Sign in on the server. Prompts go to cloud models; Local only areas stay closed.",
 	"ai_kind_openrouter": "OpenRouter",
 	"ai_kind_ollama": "Ollama (local)",
 	"ai_kind_openai-compatible": "OpenAI-compatible",

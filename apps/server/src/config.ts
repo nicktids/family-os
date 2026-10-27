@@ -186,9 +186,12 @@ export async function loadConfig(env: NodeJS.ProcessEnv = process.env): Promise<
 		...(e.FAMOS_BACKUP_PASSPHRASE !== undefined && { backupPassphrase: e.FAMOS_BACKUP_PASSPHRASE }),
 		...(e.FAMOS_AI_PROVIDER && {
 			aiSeed: {
-				name: { openrouter: 'OpenRouter', ollama: 'Ollama', 'openai-compatible': 'AI server' }[
-					e.FAMOS_AI_PROVIDER
-				],
+				name: {
+					openrouter: 'OpenRouter',
+					ollama: 'Ollama',
+					'openai-compatible': 'AI server',
+					'cli-bridge': 'CLI subscriptions',
+				}[e.FAMOS_AI_PROVIDER],
 				kind: e.FAMOS_AI_PROVIDER,
 				...(e.FAMOS_AI_BASE_URL && { baseUrl: e.FAMOS_AI_BASE_URL }),
 				...(e.FAMOS_AI_API_KEY && { apiKey: e.FAMOS_AI_API_KEY }),

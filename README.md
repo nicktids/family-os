@@ -120,3 +120,7 @@ covers installation, HTTPS and [configuration](docs/guide/configuration.md).
 
 [GNU AGPL v3.0 or later](LICENSE). You may self-host, modify and share FamilyOS; if you run a
 modified version for others over a network, you must offer them its source code.
+
+### Subscription CLI providers (this fork)
+
+Use Codex or Claude Code through an optional Docker companion with your own CLI login. Text chat and suggestions keep the existing permission and approval flow. See [setup and limitations](docs/guide/cli-subscriptions.md).

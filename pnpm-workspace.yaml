@@ -2,6 +2,7 @@ packages:
   - apps/*
   - packages/*
   - extensions/*
+  - tools/*
 
 # Versions shared by five or more packages, pinned once. Packages say `catalog:`.
 catalog:

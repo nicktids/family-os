@@ -11,6 +11,7 @@ WORKDIR /repo
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json .npmrc ./
 # The pnpm version is the one package.json's packageManager names, the single place to change it.
 RUN corepack enable
+COPY tools/cli-bridge/package.json tools/cli-bridge/
 COPY apps/server/package.json apps/server/
 COPY apps/web/package.json apps/web/
 COPY apps/e2e/package.json apps/e2e/

@@ -7,7 +7,7 @@ For whoever runs FamilyOS at home. Start with the first page; the others can wai
 3. [Everyday use](everyday.md): Today, Quick add, the calendar, shopping and tasks.
 4. [Family members, roles and devices](members.md): add people, choose what each may do, and set up phones and tablets.
 5. [Backups](backups.md): what is backed up, copying backups away, restoring.
-6. [AI and privacy](ai.md): choosing a provider, what the AI sees, turning things off.
+6. [AI and privacy](ai.md): choosing a provider, what the AI sees, turning things off. [CLI subscriptions](cli-subscriptions.md) adds Codex and Claude Code through an optional Docker companion.
 7. [Notifications](notifications.md): reminders, suggestions to review, phone notifications, quiet hours.
 8. [Telegram](telegram.md): share to Quick add and approve from Telegram.
 9. [Email](email.md): school notices and other mail in Quick add, from a dedicated mailbox.

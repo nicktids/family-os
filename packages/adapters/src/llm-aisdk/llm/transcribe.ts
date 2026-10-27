@@ -65,7 +65,7 @@ export function createTranscribe(deps: AiSdkLlmDeps, calls: LlmCalls) {
 			};
 
 			try {
-				await checkAreas(request.areas, provider.baseUrl);
+				await checkAreas(request.areas, provider);
 			} catch (error) {
 				const failure = toLlmError(error, role.model);
 				await record({ errorCode: failure.code });

@@ -1,0 +1,12 @@
+{
+	"name": "familyos-cli-bridge-runtime",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"license": "AGPL-3.0-or-later",
+	"dependencies": {
+		"@anthropic-ai/claude-code": "2.1.311",
+		"@openai/codex": "0.164.0",
+		"zod": "4.6.6"
+	}
+}

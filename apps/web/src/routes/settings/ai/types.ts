@@ -14,7 +14,12 @@ export type Role = keyof Roles;
 export type ModelList = Json<'/api/v1/ai/providers/{providerId}/models', 'get'>;
 export type Usage = Json<'/api/v1/ai/usage', 'get'>;
 
-export const KINDS: readonly ProviderKind[] = ['openrouter', 'ollama', 'openai-compatible'];
+export const KINDS: readonly ProviderKind[] = [
+	'openrouter',
+	'ollama',
+	'openai-compatible',
+	'cli-bridge',
+];
 export const ROLES: readonly Role[] = ['smart', 'vision', 'fast', 'transcribe', 'embed'];
 /** Roles that take a chat model; "use for all" never copies it onto speech to text or embeddings. */
 export const CHAT_ROLES: readonly Role[] = ['smart', 'vision', 'fast'];
@@ -22,6 +27,7 @@ export const DEFAULT_URLS: Record<ProviderKind, string> = {
 	openrouter: 'https://openrouter.ai/api/v1',
 	ollama: 'http://localhost:11434/v1',
 	'openai-compatible': '',
+	'cli-bridge': 'http://cli-bridge:8787/v1',
 };
 
 export type AiArea = Json<'/api/v1/core/ai-areas', 'get'>[number];

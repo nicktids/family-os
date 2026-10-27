@@ -7,6 +7,7 @@ export default defineConfig({
 			'extensions/*/vitest.config.ts',
 			'apps/*/vitest.config.ts',
 			'scripts/vitest.config.ts',
+			'tools/*/vitest.config.ts',
 		],
 	},
 });
