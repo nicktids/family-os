@@ -139,11 +139,13 @@ export function createAiSettings(deps: AiSettingsDeps) {
 
 	/**
 	 * Whether an address resolves only to local addresses (loopback, home network; the same test
-	 * as the guarded HTTP port). Decided by the address, not the provider kind; looked up when
+	 * as the guarded HTTP port). Cloud CLI bridges are excluded; other providers are looked up when
 	 * asked and cached for a minute. A name that does not resolve is not local.
 	 */
 	const localCache = new Map<string, { local: boolean; until: number }>();
-	async function isLocal(baseUrl: string): Promise<boolean> {
+	async function isLocal(baseUrl: string, kind?: ProviderKind): Promise<boolean> {
+		// A local transport does not make subscription inference local.
+		if (kind === 'cli-bridge') return false;
 		let host: string;
 		try {
 			host = new URL(baseUrl).hostname.replace(/^\[|\]$/g, '');
@@ -175,7 +177,7 @@ export function createAiSettings(deps: AiSettingsDeps) {
 	});
 	const toView = async (row: AiTables['ai_providers']): Promise<Provider> => ({
 		...toRecord(row),
-		local: await isLocal(row.base_url),
+		local: await isLocal(row.base_url, row.kind),
 	});
 
 	async function readSetting<T>(

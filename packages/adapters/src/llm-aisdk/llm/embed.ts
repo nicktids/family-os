@@ -28,7 +28,7 @@ export function createEmbed(deps: AiSdkLlmDeps, calls: LlmCalls) {
 				started,
 			);
 			try {
-				await checkAreas([request.area], provider.baseUrl);
+				await checkAreas([request.area], provider);
 			} catch (error) {
 				const failure = toLlmError(error, role.model);
 				await record({ errorCode: failure.code });

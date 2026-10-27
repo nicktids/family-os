@@ -6,7 +6,7 @@ import type { DbExecutor } from './ports.ts';
  * AI may see and what is switched off. The shapes live here because core's actions take them as
  * input and the model adapter stores them; neither imports the other.
  */
-export const PROVIDER_KINDS = ['openrouter', 'ollama', 'openai-compatible'] as const;
+export const PROVIDER_KINDS = ['openrouter', 'ollama', 'openai-compatible', 'cli-bridge'] as const;
 export const ProviderKindSchema = z.enum(PROVIDER_KINDS);
 export type ProviderKind = z.infer<typeof ProviderKindSchema>;
 

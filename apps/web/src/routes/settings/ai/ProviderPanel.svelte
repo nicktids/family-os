@@ -1,12 +1,13 @@
 <script lang="ts">
 	import { Button } from '@famos/ui/button';
-	import { ConfirmButton, Notice, Segmented, SidePanel } from '@famos/ui/famos';
+	import { ConfirmButton, Notice, SidePanel } from '@famos/ui/famos';
 	import { Input } from '@famos/ui/input';
 	import { Label } from '@famos/ui/label';
 	import { api } from '#lib/api.js';
 	import { runAction } from '#lib/run-action.js';
 	import { t, tDynamic } from '#lib/i18n.svelte.js';
 	import { toasts } from '#lib/toast.svelte.js';
+	import SelectField from '#lib/SelectField.svelte';
 	import {
 		DEFAULT_URLS,
 		KINDS,
@@ -192,13 +193,13 @@
 			<Notice>{t('ai_provider_managed')}</Notice>
 		{/if}
 		{#if !provider}
-			<Segmented
-				label={t('ai_providers')}
-				grow
+			<SelectField
+				aria-label={t('ai_providers')}
 				value={kind}
-				onchange={pickKind}
-				options={KINDS.map((k) => ({ value: k, label: kindName(k) }))}
-			/>
+				onchange={(e) => pickKind(e.currentTarget.value)}
+			>
+				{#each KINDS as k (k)}<option value={k}>{kindName(k)}</option>{/each}
+			</SelectField>
 			<p class="text-ink-soft text-sm">{tDynamic(`app:ai_kind_hint_${kind}`)}</p>
 		{:else}
 			<p class="text-ink-soft text-sm">

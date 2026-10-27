@@ -1,0 +1,42 @@
+name: CLI bridge image
+on:
+  pull_request:
+    paths:
+      - tools/cli-bridge/**
+      - docker/cli-bridge.Dockerfile
+      - docker-compose.cli.yml
+      - .github/workflows/cli-bridge.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - name: Build pinned CLI image
+        run: docker build -f docker/cli-bridge.Dockerfile -t familyos-cli-bridge:test .
+      - name: Native binaries start
+        run: |
+          docker run --rm --entrypoint codex familyos-cli-bridge:test --version
+          docker run --rm --entrypoint claude familyos-cli-bridge:test --version
+      - name: Bridge starts without provider credentials
+        run: |
+          printf '%s' 'test-only-ci-bridge-key-with-32-characters' > /tmp/cli_bridge_key
+          chmod 644 /tmp/cli_bridge_key
+          docker run -d --name cli-bridge-test --read-only --tmpfs /tmp --tmpfs /work:uid=1000,gid=1000 --cap-drop ALL --security-opt no-new-privileges:true --mount type=bind,source=/tmp/cli_bridge_key,target=/run/secrets/cli_bridge_key,readonly familyos-cli-bridge:test
+          docker exec cli-bridge-test node --input-type=module -e '
+            let ready = false;
+            for (let attempt = 0; attempt < 30; attempt++) {
+              try { ready = (await fetch("http://127.0.0.1:8787/health")).ok; } catch {}
+              if (ready) break;
+              await new Promise(resolve => setTimeout(resolve, 1000));
+            }
+            if (!ready) process.exit(1);
+            const denied = await fetch("http://127.0.0.1:8787/v1/models");
+            if (denied.status !== 401) process.exit(1);
+          '
+      - name: Stop test container
+        if: always()
+        run: docker rm -f cli-bridge-test || true

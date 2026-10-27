@@ -12,7 +12,7 @@ import { z } from 'zod';
 
 /**
  * AI settings shapes, shared by the adapter and the admin API. Provider kinds are presets over
- * one OpenAI-compatible client: OpenRouter, a local Ollama, or any compatible server. The shapes
+ * one OpenAI-compatible client: OpenRouter, Ollama, compatible servers and the cloud CLI bridge. The shapes
  * a family chooses (roles, limits, privacy, switches) are defined in the SDK, where core's
  * actions take them; they are re-exported here for the adapter's callers.
  */
@@ -36,6 +36,7 @@ export const DEFAULT_BASE_URLS: Record<ProviderKind, string | null> = {
 	openrouter: 'https://openrouter.ai/api/v1',
 	ollama: 'http://localhost:11434/v1',
 	'openai-compatible': null,
+	'cli-bridge': 'http://cli-bridge:8787/v1',
 };
 
 export const ProviderSchema = ProviderRecordSchema.extend({

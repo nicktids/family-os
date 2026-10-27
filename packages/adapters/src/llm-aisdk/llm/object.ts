@@ -56,7 +56,7 @@ export function createGenerateObject(deps: AiSdkLlmDeps, calls: LlmCalls) {
 			// A refused call is recorded like any failure (the error code only), and never retried
 			// with another provider.
 			try {
-				await checkAreas(request.areas, provider.baseUrl);
+				await checkAreas(request.areas, provider);
 			} catch (error) {
 				const failure = toLlmError(error, role.model);
 				await record({ errorCode: failure.code });

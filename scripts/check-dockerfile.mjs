@@ -4,7 +4,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 
 const dockerfile = readFileSync('docker/Dockerfile', 'utf8');
 const missing = [];
-for (const group of ['apps', 'packages', 'extensions']) {
+for (const group of ['apps', 'packages', 'extensions', 'tools']) {
 	let dirs = [];
 	try {
 		dirs = readdirSync(group, { withFileTypes: true }).filter((d) => d.isDirectory());

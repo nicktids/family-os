@@ -388,6 +388,8 @@
 	"ai_providers": "Sağlayıcılar",
 	"ai_no_providers": "Henüz yapay zekâ hizmeti yok. Başlamak için bir tane ekle.",
 	"ai_add_provider": "Sağlayıcı ekle",
+	"ai_kind_cli-bridge": "CLI abonelikleri",
+	"ai_kind_hint_cli-bridge": "Docker CLI köprüsü üzerinden Codex veya Claude Code. Sunucuda oturum açın. İstemler bulut modellerine gider; Yalnızca yerel alanlar kapalı kalır.",
 	"ai_kind_openrouter": "OpenRouter",
 	"ai_kind_ollama": "Ollama (yerel)",
 	"ai_kind_openai-compatible": "OpenAI uyumlu",

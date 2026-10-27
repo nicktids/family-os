@@ -4022,7 +4022,7 @@ export interface operations {
                             id: string;
                             name: string;
                             /** @enum {string} */
-                            kind: "openrouter" | "ollama" | "openai-compatible";
+                            kind: "openrouter" | "ollama" | "openai-compatible" | "cli-bridge";
                             baseUrl: string;
                             hasKey: boolean;
                             keyReadable: boolean;
@@ -4208,7 +4208,7 @@ export interface operations {
                         id: string;
                         name: string;
                         /** @enum {string} */
-                        kind: "openrouter" | "ollama" | "openai-compatible";
+                        kind: "openrouter" | "ollama" | "openai-compatible" | "cli-bridge";
                         baseUrl: string;
                         hasKey: boolean;
                         keyReadable: boolean;
@@ -24194,7 +24194,7 @@ export interface operations {
                 "application/json": {
                     name: string;
                     /** @enum {string} */
-                    kind: "openrouter" | "ollama" | "openai-compatible";
+                    kind: "openrouter" | "ollama" | "openai-compatible" | "cli-bridge";
                     /** Format: uri */
                     baseUrl?: string;
                 };
@@ -24214,7 +24214,7 @@ export interface operations {
                             id: string;
                             name: string;
                             /** @enum {string} */
-                            kind: "openrouter" | "ollama" | "openai-compatible";
+                            kind: "openrouter" | "ollama" | "openai-compatible" | "cli-bridge";
                             baseUrl: string;
                             hasKey: boolean;
                             keyReadable: boolean;
@@ -24372,7 +24372,7 @@ export interface operations {
                                 id: string;
                                 name: string;
                                 /** @enum {string} */
-                                kind: "openrouter" | "ollama" | "openai-compatible";
+                                kind: "openrouter" | "ollama" | "openai-compatible" | "cli-bridge";
                                 baseUrl: string;
                                 hasKey: boolean;
                                 keyReadable: boolean;

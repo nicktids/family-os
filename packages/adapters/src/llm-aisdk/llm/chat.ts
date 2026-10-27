@@ -41,7 +41,7 @@ export function createChat(deps: AiSdkLlmDeps, calls: LlmCalls) {
 			const started = deps.clock.now();
 			const record = recorder(request, provider.id, label, started);
 			try {
-				await checkAreas(request.areas, provider.baseUrl);
+				await checkAreas(request.areas, provider);
 			} catch (error) {
 				const failure = toLlmError(error, role.model);
 				await record({ errorCode: failure.code });
