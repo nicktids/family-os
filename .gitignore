@@ -21,3 +21,6 @@ apps/e2e/playwright-report/
 # Claude Code agent worktrees
 .claude/worktrees/
 docker-compose.override.yml
+
+# Local CLI bridge credentials
+.secrets/

@@ -16,17 +16,25 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - name: Build pinned CLI image
-        run: docker build -f docker/cli-bridge.Dockerfile -t familyos-cli-bridge:test .
+        run: docker build -f docker/cli-bridge.Dockerfile -t familyos-cli-bridge:local .
       - name: Native binaries start
         run: |
-          docker run --rm --entrypoint codex familyos-cli-bridge:test --version
-          docker run --rm --entrypoint claude familyos-cli-bridge:test --version
+          docker run --rm --entrypoint codex familyos-cli-bridge:local --version
+          docker run --rm --entrypoint claude familyos-cli-bridge:local --version
       - name: Bridge starts without provider credentials
         run: |
-          printf '%s' 'test-only-ci-bridge-key-with-32-characters' > /tmp/cli_bridge_key
-          chmod 644 /tmp/cli_bridge_key
-          docker run -d --name cli-bridge-test --read-only --tmpfs /tmp --tmpfs /work:uid=1000,gid=1000 --cap-drop ALL --security-opt no-new-privileges:true --mount type=bind,source=/tmp/cli_bridge_key,target=/run/secrets/cli_bridge_key,readonly familyos-cli-bridge:test
-          docker exec cli-bridge-test node --input-type=module -e '
+          printf '%s\n' 'FAMOS_CLI_BRIDGE_KEY=test-only-ci-bridge-key-with-32-characters' > .env
+          chmod 600 .env
+          mkdir -p .secrets
+          chmod 700 .secrets
+          (umask 077; sed -n 's/^FAMOS_CLI_BRIDGE_KEY=//p' .env | tail -n 1 > .secrets/cli_bridge_key)
+          chmod 444 .secrets/cli_bridge_key
+          dc() {
+            docker compose -p cli-bridge-ci -f docker-compose.yml -f docker-compose.build.yml -f docker-compose.cli.yml "$@"
+          }
+          dc config --quiet
+          dc up -d --no-build cli-bridge
+          dc exec -T cli-bridge node --input-type=module -e '
             let ready = false;
             for (let attempt = 0; attempt < 30; attempt++) {
               try { ready = (await fetch("http://127.0.0.1:8787/health")).ok; } catch {}
@@ -36,7 +44,13 @@ jobs:
             if (!ready) process.exit(1);
             const denied = await fetch("http://127.0.0.1:8787/v1/models");
             if (denied.status !== 401) process.exit(1);
+            const fs = await import("node:fs/promises");
+            const key = (await fs.readFile("/run/secrets/cli_bridge_key", "utf8")).trim();
+            const status = await fetch("http://127.0.0.1:8787/v1/status", { headers: { authorization: `Bearer ${key}` } });
+            if (!status.ok) process.exit(1);
+            const state = await status.json();
+            if (state.authenticated.codex !== false || state.authenticated.claude !== false) process.exit(1);
           '
       - name: Stop test container
         if: always()
-        run: docker rm -f cli-bridge-test || true
+        run: docker compose -p cli-bridge-ci -f docker-compose.yml -f docker-compose.build.yml -f docker-compose.cli.yml down --volumes --remove-orphans

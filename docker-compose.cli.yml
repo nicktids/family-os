@@ -38,7 +38,7 @@ services:
 
 secrets:
   cli_bridge_key:
-    environment: FAMOS_CLI_BRIDGE_KEY
+    file: ./.secrets/cli_bridge_key
 
 volumes:
   cli-auth:

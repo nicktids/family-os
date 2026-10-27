@@ -14,7 +14,15 @@ Use Docker Engine with Docker Compose v2. Build **this checkout**, including Fam
    # Run once; if .env already exists, append only the new variable.
    (umask 077; printf '\nFAMOS_CLI_BRIDGE_KEY=%s\n' "$(openssl rand -hex 32)" >> .env)
    chmod 600 .env
+   mkdir -p .secrets
+   chmod 700 .secrets
+   (umask 077; sed -n 's/^FAMOS_CLI_BRIDGE_KEY=//p' .env | tail -n 1 > .secrets/cli_bridge_key)
+   chmod 444 .secrets/cli_bridge_key
    ```
+
+   The secret is file-backed so it works with the bridge's read-only filesystem. The `.secrets` directory is private to your host user, while the mounted key file is readable by the container's non-root user. Both Git and the Docker build context exclude the directory. Keep the file and `FAMOS_CLI_BRIDGE_KEY` identical; recreate the file after changing the key. These commands expect the unquoted key line generated above.
+
+   If you already created `.env`, skip key generation and run only the commands from `mkdir -p .secrets` onward.
 
 2. Build and start:
 
